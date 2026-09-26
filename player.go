@@ -56,10 +56,10 @@ func (player *Player) move() {
 			return
 
 		case '1':
-			player.angle += rotSpeed
+			player.angle -= rotSpeed
 
 		case '3':
-			player.angle -= rotSpeed
+			player.angle += rotSpeed
 
 		case '2':
 			nx := player.x + dirX*moveSpeed

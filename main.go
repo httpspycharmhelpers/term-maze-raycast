@@ -54,6 +54,7 @@ func main() {
 	defer fmt.Printf("\x1b[?25h\x1b[?1049l")
 
 	var lastFpsAt = time.Now()
+	var lastTermCheck = time.Now()
 	frameCount := 0
 
 	for {
@@ -64,20 +65,26 @@ func main() {
 		default:
 		}
 
-		if cw, ch := termSize(); cw > 0 && ch > 0 {
-			if cw != screen.width || ch != screen.height {
-				screen.width, screen.height = cw, ch
-				setStatus(fmt.Sprintf("终端已缩放: %dx%d", cw, ch))
+		now := time.Now()
+
+		// 终端尺寸只每 100ms 采样一次并保持到变化稳定，避免瞬间抖动/弹出软键盘
+		// 导致尺寸来回跳，从而引起画面跳动
+		if now.Sub(lastTermCheck) >= 100*time.Millisecond {
+			lastTermCheck = now
+			if cw, ch := termSize(); cw > 0 && ch > 0 {
+				if cw != screen.width || ch != screen.height {
+					screen.width, screen.height = cw, ch
+					if screen.width < 20 {
+						screen.width = 20
+					}
+					if screen.height < 10 {
+						screen.height = 10
+					}
+					setStatus(fmt.Sprintf("终端已缩放: %dx%d", screen.width, screen.height))
+				}
 			}
 		}
-		if screen.width < 20 {
-			screen.width = 20
-		}
-		if screen.height < 10 {
-			screen.height = 10
-		}
 
-		now := time.Now()
 		frameCount++
 		if now.Sub(lastFpsAt) >= time.Second {
 			fps := float64(frameCount) / now.Sub(lastFpsAt).Seconds()
@@ -89,7 +96,12 @@ func main() {
 		}
 
 		render()
-		time.Sleep(settings.sleepTime)
+
+		// 固定帧节拍：一帧超时则不睡（追赶），否则睡到 ~66fps，
+		// 帧间隔恒定 → 平滑无卡顿，也避免高帧率全屏重绘导致的抖动
+		if sleep := settings.frameTime - time.Since(now); sleep > 0 {
+			time.Sleep(sleep)
+		}
 	}
 }
 
@@ -97,7 +109,7 @@ func newFrameWriter() []byte {
 	return make([]byte, 0, 64<<10)
 }
 
-func ensureBuffers(w, h int) {
+func ensureBuffers(w, h int) (resized bool) {
 	if len(rows) != h || (h > 0 && len(rows[0]) != w) || len(colStart) != w {
 		rows = make([][]rune, h)
 		for y := 0; y < h; y++ {
@@ -106,12 +118,14 @@ func ensureBuffers(w, h int) {
 		colStart = make([]int, w)
 		colEnd = make([]int, w)
 		colWallX = make([]float64, w)
+		return true
 	}
+	return false
 }
 
 func render() {
 	w, h := screen.width, screen.height
-	ensureBuffers(w, h)
+	resized := ensureBuffers(w, h)
 
 	dirX := math.Sin(player.angle)
 	dirY := math.Cos(player.angle)
@@ -126,7 +140,7 @@ func render() {
 	mw, mh := gameMap.width, gameMap.height
 	px, py := player.x, player.y
 
-	const maxRaySteps = 1024
+	const maxRaySteps = 512
 
 	for x := 0; x < w; x++ {
 		cameraX := (2.0*float64(x)/float64(w) - 1.0) * settings.FOV
@@ -253,13 +267,18 @@ func render() {
 	}
 
 	frameBuf = frameBuf[:0]
+	if resized {
+		frameBuf = append(frameBuf, '\x1b', '[', '2', 'J')
+	}
 	frameBuf = append(frameBuf, '\x1b', '[', 'H')
 	for y := 0; y < h; y++ {
 		r := rows[y]
 		for x := 0; x < w; x++ {
 			frameBuf = appendRune(frameBuf, r[x])
 		}
-		frameBuf = append(frameBuf, '\n')
+		if y < h-1 {
+			frameBuf = append(frameBuf, '\n')
+		}
 	}
 	os.Stdout.Write(frameBuf)
 }
