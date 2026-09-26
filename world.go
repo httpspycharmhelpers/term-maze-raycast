@@ -181,7 +181,7 @@ func handleEditKey(char rune, key keyboard.Key) bool {
 		setEditMode(false)
 		setStatus("已退出编辑模式")
 		return true
-	case char == ' ':
+	case char == ' ' || key == keyboard.KeySpace:
 		i := curY*gameMap.width + curX
 		if gameMap.grid[i] == '#' {
 			gameMap.grid[i] = ' '

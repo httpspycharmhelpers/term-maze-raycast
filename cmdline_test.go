@@ -433,6 +433,34 @@ func TestImgVideoCommands(t *testing.T) {
 	}
 }
 
+// 空格到达时是 char=0+KeySpace（终端把空格当特殊键），必须能输入空格、Ctrl+U/D 能滚动
+func TestCmdKeySpaceIsTyped(t *testing.T) {
+	ui.active = true
+	ui.closing = false
+	ui.buf = ui.buf[:0]
+	ui.out = nil
+	handleCmdKey(0, keyboard.KeySpace)
+	if string(ui.buf) != " " {
+		t.Fatalf("空格键应输入空格，实际 %q", string(ui.buf))
+	}
+	ui.out = make([]string, 10)
+	for i := range ui.out {
+		ui.out[i] = "row"
+	}
+	ui.visible = 4
+	ui.scroll = 0
+	handleCmdKey(0, keyboard.KeyCtrlU)
+	if ui.scroll == 0 {
+		t.Fatalf("Ctrl+U 应以 Key 通道滚动，scroll=%d", ui.scroll)
+	}
+	handleCmdKey(0, keyboard.KeyCtrlD)
+	if ui.scroll != 0 {
+		t.Fatalf("Ctrl+D 应下滚回底部")
+	}
+	ui.active = false
+	ui.buf = ui.buf[:0]
+}
+
 func TestJump(t *testing.T) {
 	player.init(1, 1)
 	px := player.x

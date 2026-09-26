@@ -89,11 +89,15 @@ func handleCmdKey(char rune, key keyboard.Key) bool {
 			ui.buf = ui.buf[:0]
 		}
 		return true
-	case key == keyboard.KeyPgup || char == 0x15: // Ctrl+U 上滚
+	case key == keyboard.KeyPgup || char == 0x15 || key == keyboard.KeyCtrlU: // PgUp 或 Ctrl+U 上滚
 		scrollOutput(+1)
 		return true
-	case key == keyboard.KeyPgdn || char == 0x04: // Ctrl+D 下滚
+	case key == keyboard.KeyPgdn || char == 0x04 || key == keyboard.KeyCtrlD: // PgDn 或 Ctrl+D 下滚
 		scrollOutput(-1)
+		return true
+	case key == keyboard.KeySpace:
+		// 某些终端会把空格解析成特殊键（char=0, key=KeySpace）
+		ui.buf = append(ui.buf, ' ')
 		return true
 	case key == keyboard.KeyBackspace || key == keyboard.KeyBackspace2 || char == 8 || char == 127:
 		if len(ui.buf) > 0 {

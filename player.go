@@ -151,6 +151,18 @@ func (player *Player) move() {
 			spinOn = false
 		}
 
+		// 部分终端会把空格/ESC 解析成“特殊键”（char=0 + Key），归一化后再走 char 开关
+		if char == 0 {
+			switch keyCode {
+			case keyboard.KeySpace:
+				char = ' '
+			case keyboard.KeyEsc:
+				char = '\x1b'
+			case keyboard.KeyBackspace, keyboard.KeyBackspace2:
+				char = 8
+			}
+		}
+
 		switch char {
 		case 'q':
 			fmt.Println("Exiting...")
