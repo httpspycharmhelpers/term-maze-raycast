@@ -84,6 +84,10 @@ func (m *Map) regen() {
 
 	m.grid = grid
 	m.startX, m.startY = 1, 1
+	// 开局通道：确定性地挖开出生点北、东两侧，
+	// 让玩家每次开局都能立刻前进/右移，不会顶着墙面抱怨“动不了”
+	grid[m.startY*m.width+(m.startX+1)] = ' '
+	grid[(m.startY+1)*m.width+m.startX] = ' '
 }
 
 func (m *Map) isWall(x, y int) bool {

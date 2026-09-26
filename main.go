@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -39,6 +40,27 @@ func setStatus(s string) {
 }
 
 func main() {
+	// 保存进入 raw 模式前的终端设置（回显、行模式），退出时必须还原，
+	// 否则退出后终端不回显输入（练过 keyboard 库后没有正确恢复 termios）
+	stdinFD := int(os.Stdin.Fd())
+	origTermios, _ := unix.IoctlGetTermios(stdinFD, unix.TCGETS)
+	restoreTermios := func() {
+		if origTermios != nil {
+			unix.IoctlSetTermios(stdinFD, unix.TCSETS, origTermios)
+		}
+	}
+	defer restoreTermios()
+
+	// Ctrl-C 兜底：进程被信号杀掉时 defer 不执行，必须在此恢复终端
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		<-sig
+		restoreTermios()
+		fmt.Println("\r\n已按 Ctrl-C 退出")
+		os.Exit(0)
+	}()
+
 	t0 := time.Now()
 	gameMap.regen()
 	genMs := time.Since(t0).Milliseconds()
@@ -55,6 +77,7 @@ func main() {
 
 	var lastFpsAt = time.Now()
 	var lastTermCheck = time.Now()
+	var lastFrame = time.Now()
 	frameCount := 0
 
 	for {
@@ -94,6 +117,15 @@ func main() {
 				setStatus(fmt.Sprintf("FPS %.0f  位置(%d,%d)  迷宫 %dx%d", fps, int(player.y), int(player.x), gameMap.width, gameMap.height))
 			}
 		}
+
+		// 时间增量驱动的连续移动：帧间隔变化不影响手感，
+		// 按住移动/转向键即平滑连续运动，不依赖终端按键自动重复
+		dt := now.Sub(lastFrame).Seconds()
+		if dt > 0.05 {
+			dt = 0.05
+		}
+		lastFrame = now
+		updatePlayer(dt)
 
 		render()
 

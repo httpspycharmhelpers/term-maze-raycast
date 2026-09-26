@@ -19,6 +19,9 @@ func TestRegenConnectivityAndTiming(t *testing.T) {
 	if m.grid[m.startY*m.width+m.startX] != ' ' {
 		t.Fatalf("出生点 (%d,%d) 被墙堵死", m.startX, m.startY)
 	}
+	if m.grid[m.startY*m.width+m.startX+1] != ' ' || m.grid[(m.startY+1)*m.width+m.startX] != ' ' {
+		t.Errorf("出生点北/东侧开口未打通，开局应可直接移动")
+	}
 
 	floor := 0
 	for _, c := range m.grid {
