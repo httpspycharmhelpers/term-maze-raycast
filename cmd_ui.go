@@ -22,14 +22,28 @@ type commandUI struct {
 	hist    []string
 	histIdx int
 	out     []string
+	scroll  int // 输出区上滚的行数（0 = 底部最新）
+	visible int // 最近一次绘制时输出区能显示的行数
 }
 
 var ui commandUI
 
-const cmdPanelRows = 10
-const cmdAnimTime = 120 * time.Millisecond
+const cmdAnimTime = 150 * time.Millisecond
+
+// panelHeight 面板完全展开的高度：屏幕的 1/3，至少 10 行
+func panelHeight(h int) int {
+	ph := h / 3
+	if ph < 10 {
+		ph = 10
+	}
+	if ph > h-4 {
+		ph = h - 4
+	}
+	return ph
+}
 
 func cmdPrint(s string) {
+	ui.scroll = 0
 	for _, l := range strings.Split(s, "\n") {
 		ui.out = append(ui.out, l)
 	}
@@ -75,6 +89,12 @@ func handleCmdKey(char rune, key keyboard.Key) bool {
 			ui.buf = ui.buf[:0]
 		}
 		return true
+	case key == keyboard.KeyPgup || char == 0x15: // Ctrl+U 上滚
+		scrollOutput(+1)
+		return true
+	case key == keyboard.KeyPgdn || char == 0x04: // Ctrl+D 下滚
+		scrollOutput(-1)
+		return true
 	case key == keyboard.KeyBackspace || key == keyboard.KeyBackspace2 || char == 8 || char == 127:
 		if len(ui.buf) > 0 {
 			ui.buf = ui.buf[:len(ui.buf)-1]
@@ -85,6 +105,18 @@ func handleCmdKey(char rune, key keyboard.Key) bool {
 		return true
 	}
 	return true
+}
+
+// scrollOutput 输出区滚动：dir>0 上滚（看旧内容），dir<0 下滚
+func scrollOutput(dir int) {
+	step := ui.visible / 2
+	if step < 1 {
+		step = 1
+	}
+	ui.scroll += dir * step
+	if ui.scroll < 0 {
+		ui.scroll = 0
+	}
 }
 
 // drawCmdPanel 画底部悬浮命令行面板，/ 打开时从底部滑入、ESC 收起时滑出
@@ -108,15 +140,18 @@ func drawCmdPanel(w, h int) bool {
 			progress = 1
 		}
 	}
-	if h < cmdPanelRows+2 {
+	// easeOutCubic：开始快、收尾慢，观感更顺
+	if progress < 1 {
+		e := 1 - progress
+		progress = 1 - e*e*e
+	}
+	total := panelHeight(h)
+	if total < 3 {
 		return false
 	}
-	ph := int(progress * float64(cmdPanelRows))
+	ph := int(progress * float64(total))
 	if ph < 1 {
 		return false
-	}
-	if ph > cmdPanelRows {
-		ph = cmdPanelRows
 	}
 	top := h - ph
 	// 顶部分隔线
@@ -128,18 +163,31 @@ func drawCmdPanel(w, h int) bool {
 			topRow[i] = '-'
 		}
 	}
-	// 历史行
-	hist := ui.out
-	if n := ph - 3; len(hist) > n && n > 0 {
-		hist = hist[len(hist)-n:]
+	// 输出区：nvis 行，含滚动
+	nvis := ph - 3
+	if nvis < 1 {
+		nvis = 1
 	}
-	for i := 0; i < ph-3; i++ {
+	ui.visible = nvis
+	totalOut := len(ui.out)
+	maxScroll := totalOut - nvis
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if ui.scroll > maxScroll {
+		ui.scroll = maxScroll
+	}
+	start := totalOut - nvis - ui.scroll
+	if start < 0 {
+		start = 0
+	}
+	for i := 0; i < nvis; i++ {
 		r := rows[top+1+i]
 		fillPanelRow(r, w, "")
 	}
-	for i, l := range hist {
+	for i := 0; i < nvis && start+i < totalOut; i++ {
 		r := rows[top+1+i]
-		fillPanelRow(r, w, l)
+		fillPanelRow(r, w, ui.out[start+i])
 	}
 	// 输入行
 	promptRune := []rune("> ")
@@ -153,8 +201,11 @@ func drawCmdPanel(w, h int) bool {
 		inRow[1+promptLen] = cursorRune
 	}
 	// 底部提示行：面板完全展开后才显示
-	if ph >= cmdPanelRows {
-		hint := "| 管道 && ; || 引号   ↑↓历史  ESC收起"
+	if ph >= total {
+		hint := "PgUp/PgDn 或 Ctrl+U/D 滚动  | 管道 && ; ||  ↑↓历史 ESC收起"
+		if ui.scroll > 0 || totalOut > nvis {
+			hint = fmt.Sprintf("输出 %d..%d/%d  ↑", start+1, start+nvis, totalOut) + "  | " + hint
+		}
 		hintRune := []rune(hint)
 		hRow := rows[top+ph-1]
 		fillPanelRow(hRow, w, "")

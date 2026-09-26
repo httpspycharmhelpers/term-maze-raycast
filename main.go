@@ -126,7 +126,8 @@ func main() {
 		updatePlayer(dt)
 
 		// 增量绘屏 + 重绘节流：画面无变化时不写任何字节；有变化也最多 ~40fps
-		if time.Since(lastDraw) >= settings.drawInterval {
+		// 命令面板滑入/滑出动画期间不节流，保证收放平滑
+		if ui.active || ui.closing || time.Since(lastDraw) >= settings.drawInterval {
 			render()
 			lastDraw = time.Now()
 		}
