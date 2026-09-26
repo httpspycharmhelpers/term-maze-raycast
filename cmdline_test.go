@@ -342,8 +342,8 @@ func TestEggWalls(t *testing.T) {
 			total++
 			if m.egg[i] > 0 {
 				hit++
-				if m.egg[i] >= len(eggPatterns) {
-					t.Errorf("彩蛋索引越界 %d", m.egg[i])
+				if m.egg[i] > len(eggPatterns) {
+					t.Errorf("彩蛋索引越界 %d (池大小 %d)", m.egg[i], len(eggPatterns))
 				}
 			}
 			if i >= m.width && i < len(m.grid)-m.width && i%m.width != 0 && i%m.width != m.width-1 {

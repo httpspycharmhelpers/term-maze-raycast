@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -131,57 +133,118 @@ func mediaRune(img *WallImage, egg int, wx float64, y, ds, de int) (rune, bool) 
 	return 0, false
 }
 
-// ---- 彩蛋墙：地图中 9% 墙变随机对称花纹 ----
+// ---- 彩蛋墙：随机生成但每次都严格对称的像素画 ----
 
 var egGlyphs = []rune{'&', ';', '~', '%', '/', '=', '$', '^', '!', '*', '?'}
 
-// eggPatterns[1..]：8x8 对称图形，空格=保持普通墙字符
-var eggPatterns = [][8][8]rune{
-	{}, // 0 = 保留
-	diamond(0), sandglass(1), diamond(2), diamond(3),
-	sandglass(4), diamond(5), diamond(6), diamond(7),
+// eggPatterns[i] 为第 i 号彩蛋墙的 8×8 图案；每次重建地图时随迷宫一起随机生成
+var eggPatterns [][8][8]rune
+
+// genEggPattern 从形状族里随机挑一个“确定的对称形状”，再补随机参数与字符，
+// 保证：左右对称 + 上下对称 + 成块成画（不是随机散点）；空白则重抽
+func genEggPattern(rng *rand.Rand) [8][8]rune {
+	for tries := 0; tries < 24; tries++ {
+		p := genEggPatternOnce(rng)
+		if eggFilled(p) > 0 {
+			return p
+		}
+	}
+	// 兜底：实心菱形
+	glyph := egGlyphs[rng.Intn(len(egGlyphs))]
+	return genFromPred(func(dx, dy float64) bool { return absF(dx)+absF(dy) <= 3.5 }, glyph)
 }
 
-func diamond(glyph int) [8][8]rune {
-	g := egGlyphs[glyph%len(egGlyphs)]
-	var p [8][8]rune
+func eggFilled(p [8][8]rune) int {
+	n := 0
 	for r := 0; r < 8; r++ {
-		half := 3 - r
-		if r >= 4 {
-			half = r - 4
-		}
 		for c := 0; c < 8; c++ {
-			d := 3 - c
-			if c >= 4 {
-				d = c - 4
+			if p[r][c] != ' ' {
+				n++
 			}
-			if d <= half {
-				p[r][c] = g
+		}
+	}
+	return n
+}
+
+func genFromPred(pred func(dx, dy float64) bool, glyph rune) [8][8]rune {
+	var p [8][8]rune
+	for r := range p {
+		for c := range p[r] {
+			p[r][c] = ' '
+		}
+	}
+	for r := 0; r < 8; r++ {
+		for c := 0; c < 8; c++ {
+			if pred(float64(c)-3.5, float64(r)-3.5) {
+				p[r][c] = glyph
 			}
 		}
 	}
 	return p
 }
 
-func sandglass(glyph int) [8][8]rune {
-	g := egGlyphs[glyph%len(egGlyphs)]
-	var p [8][8]rune
-	for r := 0; r < 8; r++ {
-		half := r
-		if r >= 4 {
-			half = 7 - r
+func genEggPatternOnce(rng *rand.Rand) [8][8]rune {
+	glyph := egGlyphs[rng.Intn(len(egGlyphs))]
+	var pred func(dx, dy float64) bool
+	fam := rng.Intn(11)
+	k := 1.5 + rng.Float64()*2.2 // 核心大小 1.5~3.7
+	k2 := 1.0 + rng.Float64()*1.5
+	t := 1 + rng.Intn(2) // 条纹/十字粗细
+
+	switch fam {
+	case 0: // 实心菱形
+		pred = func(dx, dy float64) bool { return absF(dx)+absF(dy) <= k }
+	case 1: // 实心圆
+		pred = func(dx, dy float64) bool { return dx*dx+dy*dy <= k*k }
+	case 2: // 实心方
+		pred = func(dx, dy float64) bool { return maxAbs(dx, dy) <= k }
+	case 3: // 大方框
+		pred = func(dx, dy float64) bool { return maxAbs(dx, dy) <= k && maxAbs(dx, dy) > k-2 }
+	case 4: // 十字
+		pred = func(dx, dy float64) bool { return absF(dx) <= float64(t) || absF(dy) <= float64(t) }
+	case 5: // 菱形环
+		pred = func(dx, dy float64) bool {
+			d := absF(dx) + absF(dy)
+			return d <= k && d > k-1.5
 		}
-		for c := 0; c < 8; c++ {
-			d := 3 - c
-			if c >= 4 {
-				d = c - 4
-			}
-			if d <= half {
-				p[r][c] = g
-			}
+	case 6: // 圆环
+		pred = func(dx, dy float64) bool {
+			d := math.Sqrt(dx*dx + dy*dy)
+			return d <= k && d > k-k2
 		}
+	case 7: // 沙漏（腰部收窄）
+		pred = func(dx, dy float64) bool {
+			return absF(dx) <= k-absF(dy)
+		}
+	case 8: // 四角方块
+		pred = func(dx, dy float64) bool { return absF(dx) >= k2 && absF(dy) >= k2 }
+	case 9: // 方环双层
+		pred = func(dx, dy float64) bool {
+			m := maxAbs(dx, dy)
+			return m <= k && m > k-0.9
+		}
+	default: // 斜向交叉带（X 形）
+		pred = func(dx, dy float64) bool { return absF(dx-dy) <= 1.1 || absF(dx+dy) <= 1.1 }
 	}
-	return p
+
+	eggDebug = fmt.Sprintf("fam=%d k=%.2f k2=%.2f t=%d glyph=%q", fam, k, k2, t, glyph)
+	return genFromPred(pred, glyph)
+}
+
+var eggDebug string
+
+func absF(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func maxAbs(a, b float64) float64 {
+	if absF(a) > absF(b) {
+		return absF(a)
+	}
+	return absF(b)
 }
 
 // ---- 命令 ----

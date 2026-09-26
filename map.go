@@ -17,12 +17,14 @@ type Map struct {
 	startY int
 }
 
-// fillEggs 约 9% 的墙格变成随机对称花纹彩蛋墙
+// fillEggs 约 9% 的墙格随机变成随机生成的对称像素画彩蛋墙
 func (m *Map) fillEggs(rng *rand.Rand) {
 	m.egg = make([]int, len(m.grid))
+	eggPatterns = eggPatterns[:0]
 	for i, c := range m.grid {
 		if c == '#' && rng.Float64() < 0.09 {
-			m.egg[i] = 1 + rng.Intn(len(eggPatterns)-1)
+			eggPatterns = append(eggPatterns, genEggPattern(rng))
+			m.egg[i] = len(eggPatterns)
 		}
 	}
 }
