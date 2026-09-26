@@ -276,19 +276,20 @@ func render() {
 				}
 				isVertical := edge < 0.08
 				isHorizontal := y == ds || y == de
+				pal := wallPalettes[wallStyle]
 				switch {
 				case isVertical && isHorizontal:
-					ch = '·'
+					ch = pal[4]
 				case isVertical:
-					ch = '|'
+					ch = pal[0]
 				case isHorizontal:
 					switch {
 					case player.pitch > 0.05:
-						ch = '/'
+						ch = pal[2]
 					case player.pitch < -0.05:
-						ch = '\\'
+						ch = pal[3]
 					default:
-						ch = '_'
+						ch = pal[1]
 					}
 				}
 			} else if y >= horizon {
@@ -301,9 +302,10 @@ func render() {
 	if settings.showMinimap {
 		drawMinimap(w, h)
 	}
-	if time.Now().UnixNano() < statusUntil {
+	if !ui.active && time.Now().UnixNano() < statusUntil {
 		drawStatus(w, h)
 	}
+	drawCmdPanel(w, h)
 
 	frameBuf = frameBuf[:0]
 	if resized {

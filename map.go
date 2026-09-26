@@ -10,6 +10,7 @@ type Map struct {
 	width  int
 	height int
 	grid   []byte
+	seed   int64
 
 	startX int
 	startY int
@@ -33,13 +34,14 @@ func (m *Map) regen(size int) {
 		h++
 	}
 	m.width, m.height = w, h
+	m.seed = time.Now().UnixNano()
 
 	grid := make([]byte, w*h)
 	for i := range grid {
 		grid[i] = '#'
 	}
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng := rand.New(rand.NewSource(m.seed))
 
 	// 递归回溯（迭代实现）：从 (1,1) 出发，以 2 格步长打通所有奇数格棋盘格
 	stack := make([]int, 1, w*h/8)
@@ -101,6 +103,27 @@ func (m *Map) isWall(x, y int) bool {
 		return true
 	}
 	return m.grid[y*m.width+x] == '#'
+}
+
+// makeFlat 生成 n×n 的开放平地（四周一圈墙），用于 space 命令
+func (m *Map) makeFlat(n int) {
+	w, h := n, n
+	grid := make([]byte, w*h)
+	for i := range grid {
+		grid[i] = ' '
+	}
+	for x := 0; x < w; x++ {
+		grid[x] = '#'
+		grid[(h-1)*w+x] = '#'
+	}
+	for y := 0; y < h; y++ {
+		grid[y*w] = '#'
+		grid[y*w+w-1] = '#'
+	}
+	m.width, m.height = w, h
+	m.grid = grid
+	m.startX, m.startY = 1, 1
+	m.seed = time.Now().UnixNano()
 }
 
 func clampF(v, lo, hi float64) float64 {

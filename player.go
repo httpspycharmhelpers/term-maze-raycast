@@ -82,6 +82,10 @@ func updatePlayer(dt float64) {
 
 	player.angle += dAngle
 
+	if spinOn {
+		player.angle += 0.25 * dt
+	}
+
 	nx := player.x + dx
 	ny := player.y + dy
 	if !gameMap.isWall(int(nx), int(player.y)) {
@@ -99,16 +103,41 @@ func (player *Player) move() {
 	defer keyboard.Close()
 
 	for {
-		char, _, err := keyboard.GetKey()
+		char, keyCode, err := keyboard.GetKey()
 		if err != nil {
 			log.Fatal(err)
 		}
 
+		// 命令模式：按键全部交给命令行处理
+		if ui.active {
+			handleCmdKey(char, keyCode)
+			continue
+		}
+
+		// 游戏内任意键停止自动旋转
+		if spinOn && char != 0 {
+			spinOn = false
+		}
+
 		switch char {
-		case 'q', '\x1b':
+		case 'q':
 			fmt.Println("Exiting...")
 			exitChan <- true
 			return
+
+		case '\x1b':
+			if settings.showMinimap {
+				settings.showMinimap = false
+			} else {
+				fmt.Println("Exiting...")
+				exitChan <- true
+				return
+			}
+
+		case '/':
+			ui.buf = ui.buf[:0]
+			ui.active = true
+			ui.histIdx = len(ui.hist)
 
 		case '1', '3', '2', '8', '4', '6':
 			// 记一次按键：主循环按帧立即走一步并衔接平滑滑动
