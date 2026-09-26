@@ -537,6 +537,81 @@ func TestRealMedia(t *testing.T) {
 	}
 }
 
+// 贴了图片/视频的墙，小地图应显示 I（不再是 #）；nearbyWallCell 应能找到玩家附近的墙
+func TestMinimapMediaMarkerAndAutoWall(t *testing.T) {
+	defer func() { wallImages = nil; videos = nil }()
+	// 手工构造一小片地图
+	mw, mh := 12, 12
+	grid := make([]byte, mw*mh)
+	for i := range grid {
+		grid[i] = ' '
+	}
+	for x := 0; x < mw; x++ {
+		grid[x] = '#'           // 顶行全墙
+		grid[mw*(mh-1)+x] = '#' // 底行全墙
+	}
+	for y := 0; y < mh; y++ {
+		grid[y*mw] = '#'
+		grid[y*mw+mw-1] = '#'
+	}
+	oldGrid := gameMap.grid
+	oldW, oldH := gameMap.width, gameMap.height
+	oldEgg := gameMap.egg
+	gameMap.grid = grid
+	gameMap.width = mw
+	gameMap.height = mh
+	gameMap.egg = nil
+	defer func() {
+		gameMap.grid = oldGrid
+		gameMap.width = oldW
+		gameMap.height = oldH
+		gameMap.egg = oldEgg
+	}()
+
+	px := 5.5
+	py := 5.5
+	oldPlayer := player
+	player.x = px
+	player.y = py
+	defer func() { player = oldPlayer }()
+
+	// 就近找墙：环搜应命中顶行 (5,0) 一类的墙
+	wx, wy, ok := nearbyWallCell()
+	if !ok {
+		t.Fatalf("nearbyWallCell 应找到墙")
+	}
+	if !gameMap.isWall(wx, wy) {
+		t.Fatalf("找到的格子 (%d,%d) 不是墙", wx, wy)
+	}
+
+	// 在玩家上方顶行附近放一扇视频与一张图，验证小地图都显示 I
+	videos = append(videos, Video{X: 5, Y: 3, Frames: []WallImage{makeWallImage([]string{"V1"}, 5, 3), makeWallImage([]string{"V2"}, 5, 3)}, Playing: true})
+
+	ensureBuffers(60, 30)
+	rh, rw := 30/2, 60/2
+
+	drawMinimap(60, 30)
+	// map 坐标 (5,3) → 屏幕 (rw/2+0, rh/2-2)
+	sx := rw/2 + int(5-px)
+	sy := rh/2 + int(3-py)
+	if rows[sy][sx] != 'I' {
+		t.Fatalf("视频墙小地图应显示 I，实际 %q at (%d,%d)", rows[sy][sx], sx, sy)
+	}
+
+	// 再贴一张静态图到 (6,3)，也应是 I
+	wallImages = append(wallImages, makeWallImage([]string{"IMG"}, 6, 3))
+	drawMinimap(60, 30)
+	sx2 := rw/2 + int(6-px)
+	if rows[rh/2+int(3-py)][sx2] != 'I' {
+		t.Fatalf("图片墙小地图应显示 I，实际 %q", rows[rh/2+int(3-py)][sx2])
+	}
+	// 没有贴内容的顶行墙仍是 #
+	sy3 := rh/2 + int(0-py) // map (5,0)
+	if rows[sy3][rw/2] != '#' {
+		t.Fatalf("普通墙小地图应显示 #，实际 %q at (%d,%d)", rows[sy3][rw/2], rw/2, sy3)
+	}
+}
+
 func TestCmdKeySpaceIsTyped(t *testing.T) {
 	ui.active = true
 	ui.closing = false

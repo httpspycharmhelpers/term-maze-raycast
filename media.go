@@ -10,6 +10,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,6 +23,10 @@ type WallImage struct {
 	X, Y  int
 	Lines []string
 	W, H  int
+	// Runes 与 Lines 同尺寸的逐字runes，mediaCell 用它们按“字”采样（Lines 是字节，宽字符会错位）
+	Runes [][]rune
+	// Colors 可选：与 Lines 同尺寸的每格真彩 RGB（r<<16|g<<8|b），0 表示沿用墙体默认色
+	Colors [][]uint32
 }
 
 type Video struct {
@@ -30,6 +35,10 @@ type Video struct {
 	Speed   time.Duration
 	Playing bool
 	Start   time.Time
+	// FPS 非 0 表示 ffmpeg 抽取的视频（用于按帧率换帧）
+	FPS int
+	// Audio 是 ffplay 音频子进程（mp4 音轨），stop/remove/退出时需要杀掉
+	Audio *exec.Cmd
 }
 
 var wallImages []WallImage
@@ -99,12 +108,12 @@ func isRealImageExt(path string) bool {
 	return false
 }
 
-// asciiImage 把真实图片降采样成 ASCII 字符画（亮度→字符渐变）
-func asciiImage(img image.Image, maxCols int) []string {
+// asciiImage 把真实图片降采样成 ASCII 字符画（亮度→字符渐变），同时给出每格真彩
+func asciiImage(img image.Image, maxCols int) ([]string, [][]uint32) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w <= 0 || h <= 0 {
-		return []string{""}
+		return []string{""}, [][]uint32{{0}}
 	}
 	if maxCols < 8 {
 		maxCols = 8
@@ -126,8 +135,10 @@ func asciiImage(img image.Image, maxCols int) []string {
 	}
 	ramp := []rune(" .·:;!%#@")
 	lines := make([]string, 0, rows)
+	colors := make([][]uint32, 0, rows)
 	for r := 0; r < rows; r++ {
 		line := make([]rune, maxCols)
+		colRow := make([]uint32, maxCols)
 		for c := 0; c < maxCols; c++ {
 			x0 := b.Min.X + c*w/maxCols
 			x1 := b.Min.X + (c+1)*w/maxCols
@@ -139,26 +150,34 @@ func asciiImage(img image.Image, maxCols int) []string {
 			if y1 <= y0 {
 				y1 = y0 + 1
 			}
-			var sum int64
-			var n int64
+			var rs, gs, bs, n int64
 			for y := y0; y < y1; y++ {
 				for x := x0; x < x1; x++ {
 					cr, cg, cb, _ := img.At(x, y).RGBA()
-					lum := (299*cr + 587*cg + 114*cb) / 1000
-					sum += int64(lum >> 8)
+					rs += int64(cr >> 8)
+					gs += int64(cg >> 8)
+					bs += int64(cb >> 8)
 					n++
 				}
 			}
-			v := int(sum / n)
-			idx := v * (len(ramp) - 1) / 255
+			if n == 0 {
+				n = 1
+			}
+			R := byte(rs / n)
+			G := byte(gs / n)
+			B := byte(bs / n)
+			lum := (299*int(R) + 587*int(G) + 114*int(B)) / 1000
+			idx := int(lum) * (len(ramp) - 1) / 255
 			if idx >= len(ramp) {
 				idx = len(ramp) - 1
 			}
 			line[c] = ramp[idx]
+			colRow[c] = uint32(R)<<16 | uint32(G)<<8 | uint32(B)
 		}
 		lines = append(lines, string(line))
+		colors = append(colors, colRow)
 	}
-	return lines
+	return lines, colors
 }
 
 // loadMediaFrames 解码真实图片/GIF 为墙贴图帧；静态图返回 1 帧
@@ -183,9 +202,11 @@ func loadMediaFrames(path string) ([]WallImage, error) {
 		var frames []WallImage
 		maxW, maxH := 0, 0
 		var ascii [][]string
+		var asciiCol [][][]uint32
 		for _, f := range g.Image {
-			a := asciiImage(f, 44)
+			a, col := asciiImage(f, 44)
 			ascii = append(ascii, a)
+			asciiCol = append(asciiCol, col)
 			if len(a) > maxH {
 				maxH = len(a)
 			}
@@ -195,18 +216,29 @@ func loadMediaFrames(path string) ([]WallImage, error) {
 				}
 			}
 		}
-		for _, a := range ascii {
+		for fi, a := range ascii {
 			pad := make([]string, maxH)
+			padCol := make([][]uint32, maxH)
 			for i, l := range a {
 				pad[i] = l
+				rc := asciiCol[fi][i]
 				for len(pad[i]) < maxW {
 					pad[i] += " "
 				}
+				rc2 := make([]uint32, maxW)
+				copy(rc2, rc)
+				for j := len(rc); j < maxW; j++ {
+					rc2[j] = 0
+				}
+				padCol[i] = rc2
 			}
 			for i := len(a); i < maxH; i++ {
 				pad[i] = strings.Repeat(" ", maxW)
+				padCol[i] = make([]uint32, maxW)
 			}
-			frames = append(frames, makeWallImage(pad, 0, 0))
+			frame := makeWallImage(pad, 0, 0)
+			frame.Colors = padCol
+			frames = append(frames, frame)
 		}
 		return frames, nil
 	}
@@ -214,20 +246,22 @@ func loadMediaFrames(path string) ([]WallImage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("无法解码图片: %v", err)
 	}
-	return []WallImage{makeWallImage(asciiImage(img, 44), 0, 0)}, nil
+	lines, col := asciiImage(img, 44)
+	frame := makeWallImage(lines, 0, 0)
+	frame.Colors = col
+	return []WallImage{frame}, nil
 }
 
 func makeWallImage(lines []string, x, y int) WallImage {
-	w := 0
-	for _, l := range lines {
-		if len(l) > w {
-			w = len(l)
+	runes := make([][]rune, len(lines))
+	w := 1
+	for i, l := range lines {
+		runes[i] = []rune(l)
+		if len(runes[i]) > w {
+			w = len(runes[i])
 		}
 	}
-	if w == 0 {
-		w = 1
-	}
-	return WallImage{X: x, Y: y, Lines: lines, W: w, H: len(lines)}
+	return WallImage{X: x, Y: y, Lines: lines, Runes: runes, W: w, H: len(lines)}
 }
 
 func imgLinkAt(x, y int) (int, int, *WallImage) {
@@ -237,7 +271,10 @@ func imgLinkAt(x, y int) (int, int, *WallImage) {
 		if v.X != x || v.Y != y || !v.Playing || len(v.Frames) == 0 {
 			continue
 		}
-		idx := int(time.Since(v.Start)/v.Speed) % len(v.Frames)
+		idx := 0
+		if v.Speed > 0 {
+			idx = int(time.Since(v.Start)/v.Speed) % len(v.Frames)
+		}
 		f := v.Frames[idx]
 		return 1, i, &f
 	}
@@ -250,8 +287,8 @@ func imgLinkAt(x, y int) (int, int, *WallImage) {
 	return -1, -1, nil
 }
 
-// wallRune 墙面贴图/彩蛋优先级的字符选择；返回 (字符, 是否替换普通墙)
-func mediaRune(img *WallImage, egg int, wx float64, y, ds, de int) (rune, bool) {
+// mediaCell 墙面贴图/彩蛋优先级的字符选择；返回 (字符, 真彩色或0, 是否替换普通墙)
+func mediaCell(img *WallImage, egg int, wx float64, y, ds, de int) (rune, uint32, bool) {
 	if img != nil {
 		if img.H > 0 && img.W > 0 {
 			c := int(wx * float64(img.W))
@@ -262,12 +299,16 @@ func mediaRune(img *WallImage, egg int, wx float64, y, ds, de int) (rune, bool) 
 			if rr >= img.H {
 				rr = img.H - 1
 			}
-			if rr < len(img.Lines) && c < len(img.Lines[rr]) {
-				return rune(img.Lines[rr][c]), true
+			var col uint32
+			if rr < len(img.Colors) && c < len(img.Colors[rr]) {
+				col = img.Colors[rr][c]
 			}
-			return ' ', true
+			if rr < len(img.Runes) && c < len(img.Runes[rr]) {
+				return img.Runes[rr][c], col, true
+			}
+			return ' ', col, true
 		}
-		return ' ', true
+		return ' ', 0, true
 	}
 	if egg > 0 {
 		pat := eggPatterns[egg]
@@ -280,11 +321,11 @@ func mediaRune(img *WallImage, egg int, wx float64, y, ds, de int) (rune, bool) 
 			row = 7
 		}
 		if ch := pat[row][c]; ch != ' ' {
-			return ch, true
+			return ch, 0, true
 		}
-		return ' ', false
+		return ' ', 0, false
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // ---- 彩蛋墙：随机生成但每次都严格对称的像素画 ----
@@ -394,6 +435,13 @@ func absF(v float64) float64 {
 	return v
 }
 
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 func maxAbs(a, b float64) float64 {
 	if absF(a) > absF(b) {
 		return absF(a)
@@ -403,6 +451,7 @@ func maxAbs(a, b float64) float64 {
 
 // ---- 命令 ----
 
+// parseWallPos 解析 [x y]；缺省时在玩家附近自动找一面墙放置
 func parseWallPos(args []string) (x, y int, ok bool) {
 	if len(args) >= 2 {
 		if ix, err1 := strconv.Atoi(args[len(args)-2]); err1 == nil {
@@ -410,6 +459,9 @@ func parseWallPos(args []string) (x, y int, ok bool) {
 				return ix, iy, true
 			}
 		}
+	}
+	if wx, wy, found := nearbyWallCell(); found {
+		return wx, wy, true
 	}
 	return frontCell()
 }
@@ -472,6 +524,7 @@ func cmdImg(args []string) (string, int) {
 			return "没有可放置的墙面位置", 1
 		}
 		var lines []string
+		var colors [][]uint32
 		note := "ASCII 文本图"
 		if isRealImageExt(path) {
 			frames, err := loadMediaFrames(path)
@@ -479,7 +532,8 @@ func cmdImg(args []string) (string, int) {
 				return "解码失败: " + err.Error(), 1
 			}
 			lines = frames[0].Lines
-			note = "真实图片转 ASCII"
+			colors = frames[0].Colors
+			note = "真实图片转 ASCII 彩色"
 		} else {
 			l, err := readArtFile(path)
 			if err != nil {
@@ -488,6 +542,7 @@ func cmdImg(args []string) (string, int) {
 			lines = l
 		}
 		im := makeWallImage(lines, x, y)
+		im.Colors = colors
 		nextImageID++
 		wallImages = append(wallImages, im)
 		return fmt.Sprintf("图片 #%d 已贴到墙面 (%d,%d)（%s），尺寸 %dx%d", nextImageID, x, y, note, im.W, im.H), 0
@@ -534,25 +589,47 @@ func cmdVideo(args []string) (string, int) {
 		}
 		ext := strings.ToLower(filepath.Ext(path))
 		var frames []WallImage
-		src := "ASCII 帧 "
+		var srate time.Duration = 150 * time.Millisecond
+		src := ""
+		fps := 0
+		var audio *exec.Cmd
 		switch {
+		case ext == ".mp4":
+			f, f0, hasAudio0, err := mp4ToFrames(avPath(path))
+			if err != nil {
+				return "mp4 失败: " + err.Error(), 1
+			}
+			frames = f
+			fps = f0
+			srate = time.Second / time.Duration(fps)
+			src = fmt.Sprintf("mp4→ASCII 真彩 %dfps %d帧", fps, len(frames))
+			if hasAudio0 {
+				a, player := startAudio(avPath(path))
+				audio = a
+				if player != "" {
+					src += fmt.Sprintf(" + 音轨(%s播放)", player)
+				} else {
+					src += "，无音频播放器(ffplay/mpv/termux-media-player)"
+				}
+			}
+			if len(frames) >= maxVideoFrames {
+				src += "（超长，截取前 10 分钟）"
+			}
 		case ext == ".gif":
 			f, err := loadMediaFrames(path)
 			if err != nil {
 				return "解码失败: " + err.Error(), 1
 			}
 			frames = f
-			src = "GIF 动图 "
+			src = fmt.Sprintf("GIF 动图 %d帧", len(frames))
 		case isRealImageExt(path):
 			f, err := loadMediaFrames(path)
 			if err != nil {
 				return "解码失败: " + err.Error(), 1
 			}
-			// 静态图当成 1 帧循环播放
+			// 静态图当成 2 帧循环播放
 			frames = []WallImage{f[0], f[0]}
-			src = "图片 "
-		case ext == ".mp4":
-			return "暂不支持解码 .mp4（需 ffmpeg 转帧），试试 .gif 动图", 1
+			src = "图片循环"
 		default:
 			lines, err := readArtFile(path)
 			if err != nil {
@@ -563,12 +640,12 @@ func cmdVideo(args []string) (string, int) {
 				return "视频文件为空或格式不对（帧之间用 --- 分隔）", 1
 			}
 			frames = f
-			src = "ASCII 帧 "
+			src = "ASCII 文本帧"
 		}
 		nextImageID++
-		v := Video{X: x, Y: y, Frames: frames, Speed: 150 * time.Millisecond, Playing: true, Start: time.Now()}
+		v := Video{X: x, Y: y, Frames: frames, Speed: srate, Playing: true, Start: time.Now(), FPS: fps, Audio: audio}
 		videos = append(videos, v)
-		return fmt.Sprintf("视频 #%d 正在墙面 (%d,%d) 播放（%s，%d 帧，150ms/帧，video stop 停止）", nextImageID, x, y, src, len(frames)), 0
+		return fmt.Sprintf("视频 #%d 正在墙面 (%d,%d) 播放（%s，%s，video stop 停止）", nextImageID, x, y, src, srate.Round(time.Millisecond)), 0
 	case "stop":
 		id, err := strconv.Atoi(args[1])
 		if err != nil || id < 1 {
@@ -579,12 +656,14 @@ func cmdVideo(args []string) (string, int) {
 			return "没有该视频", 1
 		}
 		videos[id].Playing = false
-		return fmt.Sprintf("已停止视频 #%d", id+1), 0
+		stopAudio(videos[id].Audio)
+		videos[id].Audio = nil
+		return fmt.Sprintf("已停止视频 #%d（含音轨）", id+1), 0
 	case "list":
 		var out []string
 		if s := homeMediaList("video"); s != "" {
 			out = append(out, s)
-			out = append(out, "（.gif 可直接 play；.mp4 暂不支持解码）")
+			out = append(out, "（.gif/.mp4/.jpg/.png 均可 play，mp4 需要已装 ffmpeg）")
 		}
 		if len(videos) > 0 {
 			out = append(out, "", "已加载到墙面的视频：")
@@ -593,7 +672,15 @@ func cmdVideo(args []string) (string, int) {
 				if v.Playing {
 					st = "播"
 				}
-				out = append(out, fmt.Sprintf("#%d 视频 (%d,%d) %d帧 %s", i+1, v.X, v.Y, len(v.Frames), st))
+				aud := "无声"
+				if v.Audio != nil {
+					aud = "有声"
+				}
+				fpsS := ""
+				if v.FPS > 0 {
+					fpsS = fmt.Sprintf(" %dfps", v.FPS)
+				}
+				out = append(out, fmt.Sprintf("#%d 视频 (%d,%d) %d帧%s %s %s", i+1, v.X, v.Y, len(v.Frames), fpsS, aud, st))
 			}
 		}
 		if len(out) == 0 {
@@ -605,6 +692,7 @@ func cmdVideo(args []string) (string, int) {
 		if err != nil || id < 1 || id > len(videos) {
 			return "id 无效", 1
 		}
+		stopAudio(videos[id-1].Audio)
 		videos = append(videos[:id-1], videos[id:]...)
 		return fmt.Sprintf("已移除视频 #%d", id), 0
 	}

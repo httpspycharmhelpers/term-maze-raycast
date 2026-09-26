@@ -71,6 +71,35 @@ func frontCell() (int, int, bool) {
 	return fx, fy, true
 }
 
+// nearbyWallCell 从玩家位置向外按环搜索最近的一面墙（缺省落点用）
+func nearbyWallCell() (int, int, bool) {
+	px, py := int(player.x), int(player.y)
+	g := gameMap
+	for r := 1; r <= 8; r++ {
+		for dy := -r; dy <= r; dy++ {
+			for dx := -r; dx <= r; dx++ {
+				if absInt(dx) != r && absInt(dy) != r {
+					continue // 只扫当前环，先近后远
+				}
+				x, y := px+dx, py+dy
+				if x < 0 || y < 0 || x >= g.width || y >= g.height {
+					continue
+				}
+				if _, _, im := imgLinkAt(x, y); im != nil {
+					continue // 已被贴图的墙优先留给下一面
+				}
+				if len(g.egg) == len(g.grid) && g.egg[y*g.width+x] != 0 {
+					continue // 彩蛋墙不覆盖
+				}
+				if g.grid[y*g.width+x] == '#' {
+					return x, y, true
+				}
+			}
+		}
+	}
+	return 0, 0, false
+}
+
 func removeDoorAt(x, y int) {
 	for i := range doors {
 		if doors[i].X == x && doors[i].Y == y {
@@ -373,6 +402,7 @@ func drawEditWindow(w, h int) {
 	grid := gameMap.grid
 	for y := 0; y < rh; y++ {
 		for x := 0; x < rw; x++ {
+			colorRows[y][x] = 0
 			if y == 0 || y == rh-1 || x == 0 || x == rw-1 {
 				rows[y][x] = '|'
 				continue

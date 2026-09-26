@@ -158,6 +158,12 @@ func drawCmdPanel(w, h int) bool {
 		return false
 	}
 	top := h - ph
+	// 面板覆盖区一律不继承墙体真彩色
+	for yy := top; yy < top+ph && yy < h; yy++ {
+		for i := range colorRows[yy] {
+			colorRows[yy][i] = 0
+		}
+	}
 	borderRow := func(idx int) {
 		r := rows[idx]
 		for i := range r {
@@ -209,6 +215,9 @@ func drawCmdPanel(w, h int) bool {
 	promptLen := len(full)
 	inRow := rows[top+ph-2]
 	fillPanelRow(inRow, w, string(full))
+	for i := range colorRows[top+ph-2] {
+		colorRows[top+ph-2][i] = 0
+	}
 	if promptLen < w-2 {
 		inRow[1+promptLen] = cursorRune
 	}
@@ -318,10 +327,10 @@ func cmdHelp(_ []string) (string, int) {
   save [名]      存为 ~/ 名.rmap (RAMAP)
   load [名]      载入 ~/ 名.rmap
   file <路径>    识别文件是否为本游戏存档
-  img load <文件> [x y] 贴图(.png/.jpg/.gif自动转ASCII)
-  img list|remove <id>   list会扫描~/图片文件
-  video play <文件> [x y] .gif动图/静态图/文本帧
-  video stop|list|remove <id>  list会扫描~/ gif/mp4
+  img load <文件> [x y] 彩色ASCII(.png/.jpg/.gif)，缺省就近找墙
+  img list|remove <id>   list列出~/图片文件；贴图墙小地图显示I
+  video play <文件> [x y] mp4转真彩带音轨(需ffmpeg)/gif/图/文本
+  video stop|list|remove <id> 停止含音轨；list列出~/ gif/mp4
   |  管道   && 和   || 或   ; 依次   引号 "  '`, 0
 }
 

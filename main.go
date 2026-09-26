@@ -29,6 +29,7 @@ var colImg []*WallImage
 var rows [][]rune
 var prevRows [][]rune
 var rowDirty []bool
+var colorRows, prevColorRows [][]uint32
 var frameBuf = newFrameWriter()
 
 func termSize() (int, int) {
@@ -82,6 +83,12 @@ func main() {
 	setStatus(fmt.Sprintf("迷宫 %dx%d 生成 %dms  按键:2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/-视野 %% 小地图 q退出", gameMap.width, gameMap.height, genMs))
 
 	go player.move()
+
+	defer func() {
+		for _, v := range videos {
+			stopAudio(v.Audio)
+		}
+	}()
 
 	fmt.Printf("\x1b[?1049h\x1b[2J\x1b[?25l")
 	defer fmt.Printf("\x1b[?25h\x1b[?1049l")
@@ -157,6 +164,14 @@ func ensureBuffers(w, h int) (resized bool) {
 			prevRows[y] = make([]rune, w)
 		}
 		rowDirty = make([]bool, h)
+		colorRows = make([][]uint32, h)
+		for y := 0; y < h; y++ {
+			colorRows[y] = make([]uint32, w)
+		}
+		prevColorRows = make([][]uint32, h)
+		for y := 0; y < h; y++ {
+			prevColorRows[y] = make([]uint32, w)
+		}
 		colStart = make([]int, w)
 		colEnd = make([]int, w)
 		colWallX = make([]float64, w)
@@ -283,9 +298,11 @@ func render() {
 
 	for y := 0; y < h; y++ {
 		r := rows[y]
+		cr := colorRows[y]
 		for x := 0; x < w; x++ {
 			ds, de := colStart[x], colEnd[x]
 			ch := ' '
+			col := uint32(0)
 			if y >= ds && y <= de {
 				wx := colWallX[x]
 				edge := wx
@@ -295,8 +312,9 @@ func render() {
 				isVertical := edge < 0.08
 				isHorizontal := y == ds || y == de
 				pal := wallPalettes[wallStyle]
-				if im, ok := mediaRune(colImg[x], colEgg[x], wx, y, ds, de); ok {
+				if im, c, ok := mediaCell(colImg[x], colEgg[x], wx, y, ds, de); ok {
 					ch = im
+					col = c
 				} else {
 					switch {
 					case isVertical && isHorizontal:
@@ -318,6 +336,7 @@ func render() {
 				ch = '.'
 			}
 			r[x] = ch
+			cr[x] = col
 		}
 	}
 
@@ -339,9 +358,10 @@ func render() {
 	anyChange := resized
 	for y := 0; y < h; y++ {
 		r, p := rows[y], prevRows[y]
+		rc, pc := colorRows[y], prevColorRows[y]
 		d := false
 		for x := 0; x < w; x++ {
-			if r[x] != p[x] {
+			if r[x] != p[x] || rc[x] != pc[x] {
 				d = true
 				break
 			}
@@ -364,10 +384,32 @@ func render() {
 		frameBuf = append(frameBuf, strconv.Itoa(y+1)...)
 		frameBuf = append(frameBuf, ';', '1', 'H')
 		r := rows[y]
+		rc := colorRows[y]
+		cur := uint32(0)
 		for x := 0; x < w; x++ {
+			c := rc[x]
+			switch {
+			case c != 0 && c != cur:
+				// 开始/切换真彩背景
+				frameBuf = append(frameBuf, "\x1b[48;2;"...)
+				frameBuf = append(frameBuf, strconv.Itoa(int(c>>16))...)
+				frameBuf = append(frameBuf, ';')
+				frameBuf = append(frameBuf, strconv.Itoa(int(c>>8&0xff))...)
+				frameBuf = append(frameBuf, ';')
+				frameBuf = append(frameBuf, strconv.Itoa(int(c&0xff))...)
+				frameBuf = append(frameBuf, 'm')
+				cur = c
+			case c == 0 && cur != 0:
+				frameBuf = append(frameBuf, "\x1b[0m"...)
+				cur = 0
+			}
 			frameBuf = appendRune(frameBuf, r[x])
 		}
+		if cur != 0 {
+			frameBuf = append(frameBuf, "\x1b[0m"...)
+		}
 		copy(prevRows[y], r)
+		copy(prevColorRows[y], rc)
 	}
 	os.Stdout.Write(frameBuf)
 }
@@ -391,6 +433,7 @@ func drawMinimap(w, h int) {
 
 	for y := 0; y < rh; y++ {
 		for x := 0; x < rw; x++ {
+			colorRows[y][x] = 0
 			if y == 0 || y == rh-1 || x == 0 || x == rw-1 {
 				rows[y][x] = '|'
 				continue
@@ -405,12 +448,9 @@ func drawMinimap(w, h int) {
 				rows[y][x] = 'D'
 				continue
 			}
-			if v, _, im := imgLinkAt(mapx, mapy); im != nil {
-				if v == 1 {
-					rows[y][x] = 'V'
-				} else {
-					rows[y][x] = 'I'
-				}
+			if _, _, im := imgLinkAt(mapx, mapy); im != nil {
+				// 贴了图片或视频（无论是否在播放）的墙面一律显示 I
+				rows[y][x] = 'I'
 				continue
 			}
 			if grid[mapy*mw+mapx] == '#' {
@@ -424,6 +464,7 @@ func drawMinimap(w, h int) {
 		}
 	}
 	rows[rh/2][rw/2] = 'P'
+	colorRows[rh/2][rw/2] = 0
 }
 
 func drawStatus(w, h int) {
@@ -431,8 +472,10 @@ func drawStatus(w, h int) {
 		return
 	}
 	r := rows[h-1]
+	rc := colorRows[h-1]
 	for i := range r {
 		r[i] = ' '
+		rc[i] = 0
 	}
 	pos := 0
 	for _, c := range statusMsg {
