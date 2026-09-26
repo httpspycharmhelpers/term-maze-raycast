@@ -88,10 +88,10 @@ func updatePlayer(dt float64) {
 
 	nx := player.x + dx
 	ny := player.y + dy
-	if !gameMap.isWall(int(nx), int(player.y)) {
+	if !isBlocked(int(nx), int(player.y)) {
 		player.x = nx
 	}
-	if !gameMap.isWall(int(player.x), int(ny)) {
+	if !isBlocked(int(player.x), int(ny)) {
 		player.y = ny
 	}
 }
@@ -112,6 +112,13 @@ func (player *Player) move() {
 		if ui.active {
 			handleCmdKey(char, keyCode)
 			continue
+		}
+
+		// 编辑模式：光标类按键交给编辑窗口
+		if editMode {
+			if handleEditKey(char, keyCode) {
+				continue
+			}
 		}
 
 		// 游戏内任意键停止自动旋转
@@ -137,6 +144,8 @@ func (player *Player) move() {
 		case '/':
 			ui.buf = ui.buf[:0]
 			ui.active = true
+			ui.closing = false
+			ui.openT = time.Now()
 			ui.histIdx = len(ui.hist)
 
 		case '1', '3', '2', '8', '4', '6':

@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eiannone/keyboard"
 )
@@ -14,6 +15,9 @@ import (
 
 type commandUI struct {
 	active  bool
+	closing bool
+	openT   time.Time
+	closeT  time.Time
 	buf     []rune
 	hist    []string
 	histIdx int
@@ -23,6 +27,7 @@ type commandUI struct {
 var ui commandUI
 
 const cmdPanelRows = 10
+const cmdAnimTime = 120 * time.Millisecond
 
 func cmdPrint(s string) {
 	for _, l := range strings.Split(s, "\n") {
@@ -35,9 +40,14 @@ func cmdPrint(s string) {
 
 // handleCmdKey 处理命令模式下的按键，返回 true 表示已消费
 func handleCmdKey(char rune, key keyboard.Key) bool {
+	// 收起动画期间仍然吞掉按键，避免按键漏进游戏
+	if ui.closing {
+		return true
+	}
 	switch {
 	case key == keyboard.KeyEsc || char == 27:
-		ui.active = false
+		ui.closing = true
+		ui.closeT = time.Now()
 		ui.buf = ui.buf[:0]
 		return true
 	case key == keyboard.KeyEnter || char == '\r' || char == '\n':
@@ -77,12 +87,37 @@ func handleCmdKey(char rune, key keyboard.Key) bool {
 	return true
 }
 
-// drawCmdPanel 画底部悬浮命令行面板，返回是否绘制
+// drawCmdPanel 画底部悬浮命令行面板，/ 打开时从底部滑入、ESC 收起时滑出
+// 返回 true 表示本帧绘制了面板（部分高度也算），供外层判断
 func drawCmdPanel(w, h int) bool {
-	if !ui.active || h < cmdPanelRows+2 {
+	now := time.Now()
+	var progress float64
+	if ui.closing {
+		el := now.Sub(ui.closeT)
+		if el >= cmdAnimTime {
+			ui.active = false
+			ui.closing = false
+			return false
+		}
+		progress = 1 - float64(el)/float64(cmdAnimTime)
+	} else if !ui.active {
+		return false
+	} else {
+		progress = float64(now.Sub(ui.openT)) / float64(cmdAnimTime)
+		if progress > 1 {
+			progress = 1
+		}
+	}
+	if h < cmdPanelRows+2 {
 		return false
 	}
-	ph := cmdPanelRows
+	ph := int(progress * float64(cmdPanelRows))
+	if ph < 1 {
+		return false
+	}
+	if ph > cmdPanelRows {
+		ph = cmdPanelRows
+	}
 	top := h - ph
 	// 顶部分隔线
 	topRow := rows[top]
@@ -95,8 +130,8 @@ func drawCmdPanel(w, h int) bool {
 	}
 	// 历史行
 	hist := ui.out
-	if len(hist) > ph-3 {
-		hist = hist[len(hist)-(ph-3):]
+	if n := ph - 3; len(hist) > n && n > 0 {
+		hist = hist[len(hist)-n:]
 	}
 	for i := 0; i < ph-3; i++ {
 		r := rows[top+1+i]
@@ -117,13 +152,15 @@ func drawCmdPanel(w, h int) bool {
 	if promptLen < w-2 {
 		inRow[1+promptLen] = cursorRune
 	}
-	// 底部提示行
-	hint := "| 管道 && ; || 引号   ↑↓历史  ESC退出命令模式"
-	hintRune := []rune(hint)
-	hRow := rows[top+ph-1]
-	fillPanelRow(hRow, w, "")
-	for i := 0; i < len(hintRune) && 1+i < w-1; i++ {
-		hRow[1+i] = hintRune[i]
+	// 底部提示行：面板完全展开后才显示
+	if ph >= cmdPanelRows {
+		hint := "| 管道 && ; || 引号   ↑↓历史  ESC收起"
+		hintRune := []rune(hint)
+		hRow := rows[top+ph-1]
+		fillPanelRow(hRow, w, "")
+		for i := 0; i < len(hintRune) && 1+i < w-1; i++ {
+			hRow[1+i] = hintRune[i]
+		}
 	}
 	return true
 }
@@ -178,23 +215,29 @@ var builtins = map[string]builtinFunc{
 	"save":      cmdSave,
 	"load":      cmdLoad,
 	"file":      cmdFile,
+	"door":      cmdDoor,
+	"bookmark":  cmdBookmark,
+	"goto":      cmdGoto,
+	"elevator":  cmdElevator,
+	"edit":      cmdEdit,
 }
 
 func cmdHelp(_ []string) (string, int) {
 	return `可用命令：
-  help           显示帮助
+  help           显示帮助     clear 清空历史
   where          位置/楼层/朝向/高度/视野
-  home           回出生点
-  tp x y         传送指定坐标
+  home           回出生点     tp x y 传送
   seed           显示地图种子
   fov [值|wide|normal|+|-]  视野 0.5~5
   height [值|high|low|ground|+|-]
   reset          重置俯仰与高度
-  spin [on|off]  自动旋转视角
-  flip           上下翻转
-  party          更换墙体样式
-  floorinfo      当前楼层信息
-  space          创建 200x200 平地 / close 回迷宫
+  spin [on|off]  自动旋转视角   flip 上下翻转
+  party          更换墙体样式   floorinfo 楼层信息
+  space          200x200 平地 / close 回迷宫
+  door [x y|open|close [all]|list]  门
+  bookmark [名]  标记当前位置    goto [名] 传送书签
+  elevator [楼层|home|list]  电梯换层
+  edit           进入/退出编辑模式（Q退出）
   save [名]      存为 ~/ 名.rmap (RAMAP)
   load [名]      载入 ~/ 名.rmap
   file <路径>    识别文件是否为本游戏存档
@@ -222,8 +265,8 @@ func dirText(a float64) string {
 }
 
 func cmdWhere(_ []string) (string, int) {
-	return fmt.Sprintf("位置 (%d,%d)  楼层 1  朝向 %s (%.1f°)  俯仰 %.2f  高度 %.2f  视野 %.2f",
-		int(player.x), int(player.y), dirText(player.angle), player.angle*180/math.Pi,
+	return fmt.Sprintf("位置 (%d,%d)  楼层 %d  朝向 %s (%.1f°)  俯仰 %.2f  高度 %.2f  视野 %.2f",
+		int(player.x), int(player.y), currentFloor, dirText(player.angle), player.angle*180/math.Pi,
 		player.pitch, player.camHeight, settings.FOV), 0
 }
 
@@ -332,9 +375,9 @@ func cmdParty(_ []string) (string, int) {
 
 func cmdFloorInfo(_ []string) (string, int) {
 	if openMode {
-		return "当前楼层：开放平地 (200×200)，自由漫步", 0
+		return fmt.Sprintf("当前楼层 %d：开放平地 (200×200)，自由漫步", currentFloor), 0
 	}
-	return fmt.Sprintf("当前楼层：迷宫 (%dx%d，种子 %d)，所有通路互相连通", gameMap.width, gameMap.height, gameMap.seed), 0
+	return fmt.Sprintf("当前楼层 %d：迷宫 (%dx%d，种子 %d)，所有通路互相连通", currentFloor, gameMap.width, gameMap.height, gameMap.seed), 0
 }
 
 func cmdSpace(args []string) (string, int) {

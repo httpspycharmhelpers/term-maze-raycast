@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -231,60 +229,16 @@ func runCmd(args []string, stdin []byte) cmdResult {
 	if isUnimplemented(name) {
 		return cmdResult{text: fmt.Sprintf("%s：功能尚未实现，敬请期待", name), code: 1}
 	}
-	// 外部命令转发给系统 sh
-	cmdStr := shellQuoted(args)
-	c := exec.Command("sh", "-c", cmdStr)
-	if stdin != nil {
-		c.Stdin = bytes.NewReader(stdin)
+	// 只支持内置命令，不执行外部命令
+	return cmdResult{
+		text: fmt.Sprintf("未知命令 %q（用 help 查看可用命令）", name),
+		code: 127,
 	}
-	var buf bytes.Buffer
-	c.Stdout = &buf
-	c.Stderr = &buf
-	err := c.Run()
-	code := 0
-	if err != nil {
-		code = 1
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		}
-		if code == 127 && buf.Len() == 0 {
-			buf.WriteString(fmt.Sprintf("%s: 命令未找到", args[0]))
-		}
-	}
-	return cmdResult{text: buf.String(), code: code}
-}
-
-func shellQuoted(args []string) string {
-	var b strings.Builder
-	for i, a := range args {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteString(shellQuote(a))
-	}
-	return b.String()
-}
-
-func shellQuote(s string) string {
-	ok := true
-	for _, r := range s {
-		if !(r == '_' || r == '-' || r == '.' || r == '/' || r == ':' ||
-			r == '=' || r == '+' || r == ',' || r == '@' || r >= '0' && r <= '9' ||
-			r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
-			ok = false
-			break
-		}
-	}
-	if ok && s != "" {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 var unimplemented = map[string]bool{
-	"edit": true, "grab": true, "place": true, "door": true,
-	"img": true, "video": true, "bookmark": true, "goto": true,
-	"elevator": true,
+	"grab": true, "place": true,
+	"img": true, "video": true,
 }
 
 func isUnimplemented(name string) bool {

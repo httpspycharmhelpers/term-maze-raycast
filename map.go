@@ -20,6 +20,10 @@ type Map struct {
 // 绝不出现被墙封死的死路或孤岛。之后再随机拆墙（braiding）打通多份回环，
 // 让玩家随便逛都不会被困。尺寸自动归一为奇数。
 func (m *Map) regen(size int) {
+	m.regenSeed(size, time.Now().UnixNano())
+}
+
+func (m *Map) regenSeed(size int, seed int64) {
 	w, h := size, size
 	if w < 7 {
 		w = 7
@@ -34,7 +38,7 @@ func (m *Map) regen(size int) {
 		h++
 	}
 	m.width, m.height = w, h
-	m.seed = time.Now().UnixNano()
+	m.seed = seed
 
 	grid := make([]byte, w*h)
 	for i := range grid {

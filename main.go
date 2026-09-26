@@ -178,6 +178,8 @@ func render() {
 	grid := gameMap.grid
 	mw, mh := gameMap.width, gameMap.height
 	px, py := player.x, player.y
+	rebuildDoorBlock()
+	block := doorBlock
 
 	const maxRaySteps = 512
 
@@ -227,7 +229,7 @@ func render() {
 			if mapX < 0 || mapX >= mw || mapY < 0 || mapY >= mh {
 				break
 			}
-			if grid[mapY*mw+mapX] == '#' {
+			if grid[mapY*mw+mapX] == '#' || block[mapY*mw+mapX] != 0 {
 				break
 			}
 		}
@@ -302,6 +304,9 @@ func render() {
 	if settings.showMinimap {
 		drawMinimap(w, h)
 	}
+	if editMode {
+		drawEditWindow(w, h)
+	}
 	if !ui.active && time.Now().UnixNano() < statusUntil {
 		drawStatus(w, h)
 	}
@@ -374,6 +379,10 @@ func drawMinimap(w, h int) {
 			mapy := int(player.y) + (y - rh/2)
 			if mapx < 0 || mapx >= mw || mapy < 0 || mapy >= mh {
 				rows[y][x] = ' '
+				continue
+			}
+			if doorIdxAt(mapx, mapy) >= 0 {
+				rows[y][x] = 'D'
 				continue
 			}
 			if grid[mapy*mw+mapx] == '#' {
