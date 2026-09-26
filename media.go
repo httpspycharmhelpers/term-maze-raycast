@@ -133,7 +133,7 @@ func mediaRune(img *WallImage, egg int, wx float64, y, ds, de int) (rune, bool) 
 
 // ---- 彩蛋墙：地图中 9% 墙变随机对称花纹 ----
 
-var egGlyphs = []rune{'◆', '●', '★', '▚', '▞', '♠', '♪', '☼'}
+var egGlyphs = []rune{'&', ';', '~', '%', '/', '=', '$', '^', '!', '*', '?'}
 
 // eggPatterns[1..]：8x8 对称图形，空格=保持普通墙字符
 var eggPatterns = [][8][8]rune{
