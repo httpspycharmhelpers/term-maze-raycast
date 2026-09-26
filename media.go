@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"math"
 	"math/rand"
 	"os"
@@ -31,11 +36,11 @@ var wallImages []WallImage
 var videos []Video
 var nextImageID int
 
-// readArtFile 读取 ~/ 下的 ASCII 图片/视频文件（只允许访问 HOME 目录）
-func readArtFile(path string) ([]string, error) {
+// sanitizeArtPath 校验并返回 ~ 下的完整路径（只允许访问 HOME 目录）
+func sanitizeArtPath(path string) (string, error) {
 	home := os.Getenv("HOME")
 	if home == "" {
-		return nil, fmt.Errorf("无法确定 HOME 目录")
+		return "", fmt.Errorf("无法确定 HOME 目录")
 	}
 	full := path
 	if !filepath.IsAbs(full) {
@@ -44,7 +49,16 @@ func readArtFile(path string) ([]string, error) {
 	full = filepath.Clean(full)
 	rel, err := filepath.Rel(home, full)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		return nil, fmt.Errorf("只能访问 ~ 目录下的文件")
+		return "", fmt.Errorf("只能访问 ~ 目录下的文件")
+	}
+	return full, nil
+}
+
+// readArtFile 读取 ~/ 下的 ASCII 图片/视频文件（只允许访问 HOME 目录）
+func readArtFile(path string) ([]string, error) {
+	full, err := sanitizeArtPath(path)
+	if err != nil {
+		return nil, err
 	}
 	data, err := os.ReadFile(full)
 	if err != nil {
@@ -61,6 +75,146 @@ func readArtFile(path string) ([]string, error) {
 		lines = lines[:len(lines)-1]
 	}
 	return lines, nil
+}
+
+func readArtBytes(path string) ([]byte, error) {
+	full, err := sanitizeArtPath(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// isRealImageExt 判断是否为可直接解码的真实图片/动图文件
+func isRealImageExt(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp":
+		return true
+	}
+	return false
+}
+
+// asciiImage 把真实图片降采样成 ASCII 字符画（亮度→字符渐变）
+func asciiImage(img image.Image, maxCols int) []string {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return []string{""}
+	}
+	if maxCols < 8 {
+		maxCols = 8
+	}
+	if maxCols > w {
+		maxCols = w
+	}
+	// 终端字符约 2:1（高/宽），按此换算行数
+	rows := int(float64(maxCols) * float64(h) / float64(w) * 0.5)
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > 60 {
+		rows = 60
+		maxCols = int(float64(rows) * float64(w) / float64(h) * 2)
+		if maxCols < 8 {
+			maxCols = 8
+		}
+	}
+	ramp := []rune(" .·:;!%#@")
+	lines := make([]string, 0, rows)
+	for r := 0; r < rows; r++ {
+		line := make([]rune, maxCols)
+		for c := 0; c < maxCols; c++ {
+			x0 := b.Min.X + c*w/maxCols
+			x1 := b.Min.X + (c+1)*w/maxCols
+			y0 := b.Min.Y + r*h/rows
+			y1 := b.Min.Y + (r+1)*h/rows
+			if x1 <= x0 {
+				x1 = x0 + 1
+			}
+			if y1 <= y0 {
+				y1 = y0 + 1
+			}
+			var sum int64
+			var n int64
+			for y := y0; y < y1; y++ {
+				for x := x0; x < x1; x++ {
+					cr, cg, cb, _ := img.At(x, y).RGBA()
+					lum := (299*cr + 587*cg + 114*cb) / 1000
+					sum += int64(lum >> 8)
+					n++
+				}
+			}
+			v := int(sum / n)
+			idx := v * (len(ramp) - 1) / 255
+			if idx >= len(ramp) {
+				idx = len(ramp) - 1
+			}
+			line[c] = ramp[idx]
+		}
+		lines = append(lines, string(line))
+	}
+	return lines
+}
+
+// loadMediaFrames 解码真实图片/GIF 为墙贴图帧；静态图返回 1 帧
+func loadMediaFrames(path string) ([]WallImage, error) {
+	data, err := readArtBytes(path)
+	if err != nil {
+		return nil, err
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("无法解码图片 %s: %v", path, err)
+	}
+	_ = cfg
+	if format == "gif" {
+		g, err := gif.DecodeAll(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("无法解码 GIF: %v", err)
+		}
+		if len(g.Image) == 0 {
+			return nil, fmt.Errorf("GIF 没有帧")
+		}
+		var frames []WallImage
+		maxW, maxH := 0, 0
+		var ascii [][]string
+		for _, f := range g.Image {
+			a := asciiImage(f, 44)
+			ascii = append(ascii, a)
+			if len(a) > maxH {
+				maxH = len(a)
+			}
+			for _, l := range a {
+				if len(l) > maxW {
+					maxW = len(l)
+				}
+			}
+		}
+		for _, a := range ascii {
+			pad := make([]string, maxH)
+			for i, l := range a {
+				pad[i] = l
+				for len(pad[i]) < maxW {
+					pad[i] += " "
+				}
+			}
+			for i := len(a); i < maxH; i++ {
+				pad[i] = strings.Repeat(" ", maxW)
+			}
+			frames = append(frames, makeWallImage(pad, 0, 0))
+		}
+		return frames, nil
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("无法解码图片: %v", err)
+	}
+	return []WallImage{makeWallImage(asciiImage(img, 44), 0, 0)}, nil
 }
 
 func makeWallImage(lines []string, x, y int) WallImage {
@@ -260,6 +414,48 @@ func parseWallPos(args []string) (x, y int, ok bool) {
 	return frontCell()
 }
 
+// homeMediaList 列出 ~ 目录下某类媒体文件（img=gif支持多帧，video 含 mp4）
+func homeMediaList(kind string) string {
+	var exts []string
+	if kind == "img" {
+		exts = []string{".png", ".jpg", ".jpeg", ".gif"}
+	} else {
+		exts = []string{".gif", ".mp4"}
+	}
+	files := homeMediaFiles(exts...)
+	if len(files) == 0 {
+		return "（~ 目录没有这些文件：" + kind + " → " + strings.Join(exts, " ") + "）"
+	}
+	return "~/ 下 " + kind + " 文件：\n  " + strings.Join(files, "\n  ")
+}
+
+// homeMediaFiles 扫描 ~ 目录，返回指定扩展名（小写、带点）的文件名列表
+func homeMediaFiles(exts ...string) []string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return nil
+	}
+	var found []string
+	dir, err := os.ReadDir(home)
+	if err != nil {
+		return nil
+	}
+	for _, e := range dir {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		for _, want := range exts {
+			if ext == want {
+				found = append(found, name)
+				break
+			}
+		}
+	}
+	return found
+}
+
 func cmdImg(args []string) (string, int) {
 	if len(args) < 1 {
 		return "用法: img load <文件> [x y] | list | remove <id>", 1
@@ -275,21 +471,39 @@ func cmdImg(args []string) (string, int) {
 		if !ok {
 			return "没有可放置的墙面位置", 1
 		}
-		lines, err := readArtFile(path)
-		if err != nil {
-			return "读取失败: " + err.Error(), 1
+		var lines []string
+		note := "ASCII 文本图"
+		if isRealImageExt(path) {
+			frames, err := loadMediaFrames(path)
+			if err != nil {
+				return "解码失败: " + err.Error(), 1
+			}
+			lines = frames[0].Lines
+			note = "真实图片转 ASCII"
+		} else {
+			l, err := readArtFile(path)
+			if err != nil {
+				return "读取失败: " + err.Error(), 1
+			}
+			lines = l
 		}
 		im := makeWallImage(lines, x, y)
 		nextImageID++
 		wallImages = append(wallImages, im)
-		return fmt.Sprintf("图片 #%d 已贴到墙面 (%d,%d)，尺寸 %dx%d", nextImageID, x, y, im.W, im.H), 0
+		return fmt.Sprintf("图片 #%d 已贴到墙面 (%d,%d)（%s），尺寸 %dx%d", nextImageID, x, y, note, im.W, im.H), 0
 	case "list":
-		if len(wallImages) == 0 {
-			return "还没有贴墙图片", 0
-		}
 		var out []string
-		for i, im := range wallImages {
-			out = append(out, fmt.Sprintf("#%d 图 (%d,%d) %dx%d", i+1, im.X, im.Y, im.W, im.H))
+		if s := homeMediaList("img"); s != "" {
+			out = append(out, s)
+		}
+		if len(wallImages) > 0 {
+			out = append(out, "", "已加载到墙面的图片：")
+			for i, im := range wallImages {
+				out = append(out, fmt.Sprintf("#%d 图 (%d,%d) %dx%d", i+1, im.X, im.Y, im.W, im.H))
+			}
+		}
+		if len(out) == 0 {
+			return "还没有贴墙图片，~/ 下也没有图片文件", 0
 		}
 		return strings.Join(out, "\n"), 0
 	case "remove":
@@ -318,18 +532,43 @@ func cmdVideo(args []string) (string, int) {
 		if !ok {
 			return "没有可放置的墙面位置", 1
 		}
-		lines, err := readArtFile(path)
-		if err != nil {
-			return "读取失败: " + err.Error(), 1
-		}
-		frames := splitFrames(lines)
-		if len(frames) == 0 {
-			return "视频文件为空或格式不对（帧之间用 --- 分隔）", 1
+		ext := strings.ToLower(filepath.Ext(path))
+		var frames []WallImage
+		src := "ASCII 帧 "
+		switch {
+		case ext == ".gif":
+			f, err := loadMediaFrames(path)
+			if err != nil {
+				return "解码失败: " + err.Error(), 1
+			}
+			frames = f
+			src = "GIF 动图 "
+		case isRealImageExt(path):
+			f, err := loadMediaFrames(path)
+			if err != nil {
+				return "解码失败: " + err.Error(), 1
+			}
+			// 静态图当成 1 帧循环播放
+			frames = []WallImage{f[0], f[0]}
+			src = "图片 "
+		case ext == ".mp4":
+			return "暂不支持解码 .mp4（需 ffmpeg 转帧），试试 .gif 动图", 1
+		default:
+			lines, err := readArtFile(path)
+			if err != nil {
+				return "读取失败: " + err.Error(), 1
+			}
+			f := splitFrames(lines)
+			if len(f) == 0 {
+				return "视频文件为空或格式不对（帧之间用 --- 分隔）", 1
+			}
+			frames = f
+			src = "ASCII 帧 "
 		}
 		nextImageID++
 		v := Video{X: x, Y: y, Frames: frames, Speed: 150 * time.Millisecond, Playing: true, Start: time.Now()}
 		videos = append(videos, v)
-		return fmt.Sprintf("视频 #%d 正在墙面 (%d,%d) 播放，%d 帧，帧间 150ms（video stop 停止）", nextImageID, x, y, len(frames)), 0
+		return fmt.Sprintf("视频 #%d 正在墙面 (%d,%d) 播放（%s，%d 帧，150ms/帧，video stop 停止）", nextImageID, x, y, src, len(frames)), 0
 	case "stop":
 		id, err := strconv.Atoi(args[1])
 		if err != nil || id < 1 {
@@ -342,16 +581,23 @@ func cmdVideo(args []string) (string, int) {
 		videos[id].Playing = false
 		return fmt.Sprintf("已停止视频 #%d", id+1), 0
 	case "list":
-		if len(videos) == 0 {
-			return "还没有视频", 0
-		}
 		var out []string
-		for i, v := range videos {
-			st := "停"
-			if v.Playing {
-				st = "播"
+		if s := homeMediaList("video"); s != "" {
+			out = append(out, s)
+			out = append(out, "（.gif 可直接 play；.mp4 暂不支持解码）")
+		}
+		if len(videos) > 0 {
+			out = append(out, "", "已加载到墙面的视频：")
+			for i, v := range videos {
+				st := "停"
+				if v.Playing {
+					st = "播"
+				}
+				out = append(out, fmt.Sprintf("#%d 视频 (%d,%d) %d帧 %s", i+1, v.X, v.Y, len(v.Frames), st))
 			}
-			out = append(out, fmt.Sprintf("#%d 视频 (%d,%d) %d帧 %s", i+1, v.X, v.Y, len(v.Frames), st))
+		}
+		if len(out) == 0 {
+			return "还没有视频，~/ 下也没有视频文件", 0
 		}
 		return strings.Join(out, "\n"), 0
 	case "remove":

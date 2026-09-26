@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/gif"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -434,6 +439,104 @@ func TestImgVideoCommands(t *testing.T) {
 }
 
 // 空格到达时是 char=0+KeySpace（终端把空格当特殊键），必须能输入空格、Ctrl+U/D 能滚动
+func TestRealMedia(t *testing.T) {
+	dir := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", oldHome)
+	defer func() { wallImages = nil; videos = nil }()
+
+	// 造一张真实 PNG（左黑右白，ASCII 应出现不同亮度字符）
+	pngBuf := &bytes.Buffer{}
+	pngImg := image.NewGray(image.Rect(0, 0, 20, 20))
+	for y := 0; y < 20; y++ {
+		for x := 0; x < 20; x++ {
+			v := uint8(0)
+			if x >= 10 {
+				v = 255
+			}
+			pngImg.SetGray(x, y, color.Gray{Y: v})
+		}
+	}
+	if err := png.Encode(pngBuf, pngImg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pic.png"), pngBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 造一个两帧 GIF，帧内容不同
+	gifFrames := []*image.Paletted{}
+	pal := color.Palette{color.Black, color.White}
+	for f := 0; f < 2; f++ {
+		p := image.NewPaletted(image.Rect(0, 0, 12, 12), pal)
+		for y := 0; y < 12; y++ {
+			for x := 0; x < 12; x++ {
+				if x < 6 == (f == 0) {
+					p.SetColorIndex(x, y, 1)
+				}
+			}
+		}
+		gifFrames = append(gifFrames, p)
+	}
+	gifBuf := &bytes.Buffer{}
+	gifImg := &gif.GIF{Image: gifFrames, Delay: []int{10, 10}, LoopCount: 0}
+	if err := gif.EncodeAll(gifBuf, gifImg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "anim.gif"), gifBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// img load 识别 .png → 转 ASCII，尺寸非零
+	msg, code := cmdImg([]string{"load", "pic.png", "2", "2"})
+	if code != 0 {
+		t.Fatalf("img load png 失败: %s", msg)
+	}
+	if len(wallImages) != 1 || wallImages[0].H == 0 || wallImages[0].W == 0 {
+		t.Fatalf("png 解码失败: %+v", wallImages)
+	}
+
+	// video play .gif → 多帧播放
+	_, code = cmdVideo([]string{"play", "anim.gif", "4", "4"})
+	if code != 0 {
+		t.Fatalf("video play gif 失败")
+	}
+	if len(videos) != 1 || !videos[0].Playing || len(videos[0].Frames) < 2 {
+		t.Fatalf("gif 应至少 2 帧: %+v", videos)
+	}
+	_, code = cmdVideo([]string{"stop", "1"})
+	if code != 0 {
+		t.Fatalf("stop 失败")
+	}
+
+	// list 应同时展示 ~ 目录扫描结果与已加载项
+	msg, _ = cmdImg([]string{"list"})
+	if !strings.Contains(msg, "pic.png") || !strings.Contains(msg, "anim.gif") {
+		t.Fatalf("img list 应含 ~ 目录文件: %s", msg)
+	}
+	if !strings.Contains(msg, "已加载到墙面") {
+		t.Fatalf("img list 应含已加载项: %s", msg)
+	}
+	msg, _ = cmdVideo([]string{"list"})
+	if !strings.Contains(msg, "anim.gif") {
+		t.Fatalf("video list 应含 gif: %s", msg)
+	}
+
+	// mp4 会列出但 play 明确拒绝
+	if err := os.WriteFile(filepath.Join(dir, "movie.mp4"), []byte("not really mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msg, code = cmdVideo([]string{"play", "movie.mp4", "1", "1"})
+	if code == 0 || !strings.Contains(msg, "mp4") {
+		t.Fatalf("mp4 应明确提示暂不支持: %s", msg)
+	}
+	msg, _ = cmdVideo([]string{"list"})
+	if !strings.Contains(msg, "movie.mp4") {
+		t.Fatalf("video list 应含 mp4: %s", msg)
+	}
+}
+
 func TestCmdKeySpaceIsTyped(t *testing.T) {
 	ui.active = true
 	ui.closing = false

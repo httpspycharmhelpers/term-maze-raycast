@@ -318,10 +318,10 @@ func cmdHelp(_ []string) (string, int) {
   save [名]      存为 ~/ 名.rmap (RAMAP)
   load [名]      载入 ~/ 名.rmap
   file <路径>    识别文件是否为本游戏存档
-  img load <文件> [x y] 贴ASCII图到墙面
-  img list|remove <id>  查看/卸载贴图
-  video play <文件> [x y] 墙面播放ASCII视频
-  video stop|list|remove <id>
+  img load <文件> [x y] 贴图(.png/.jpg/.gif自动转ASCII)
+  img list|remove <id>   list会扫描~/图片文件
+  video play <文件> [x y] .gif动图/静态图/文本帧
+  video stop|list|remove <id>  list会扫描~/ gif/mp4
   |  管道   && 和   || 或   ; 依次   引号 "  '`, 0
 }
 
