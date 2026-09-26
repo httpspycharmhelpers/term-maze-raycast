@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-var elapsedTime float64
 var exitChan = make(chan bool)
 
 var gameMap Map
@@ -20,6 +18,12 @@ var screen Screen
 
 var statusMsg string
 var statusUntil int64
+
+// 渲染缓冲跨帧复用，避免每帧分配，提升性能
+var colStart, colEnd []int
+var colWallX []float64
+var rows [][]rune
+var frameBuf = newFrameWriter()
 
 func termSize() (int, int) {
 	ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
@@ -35,23 +39,24 @@ func setStatus(s string) {
 }
 
 func main() {
+	t0 := time.Now()
 	gameMap.regen()
+	genMs := time.Since(t0).Milliseconds()
+
 	settings.init()
 	screen.init()
 	player.init(float64(gameMap.startX), float64(gameMap.startY))
-	setStatus("到达出口 E 生成新迷宫  按键: 2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/−视野 % 小地图 q 退出")
+	setStatus(fmt.Sprintf("迷宫 %dx%d 生成 %dms  按键:2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/-视野 %% 小地图 q退出", gameMap.width, gameMap.height, genMs))
 
 	go player.move()
 
 	fmt.Printf("\x1b[?1049h\x1b[2J\x1b[?25l")
 	defer fmt.Printf("\x1b[?25h\x1b[?1049l")
 
-	time_point_1 := time.Now()
-	for {
-		time_point_2 := time.Now()
-		elapsedTime = time_point_2.Sub(time_point_1).Seconds()
-		time_point_1 = time_point_2
+	var lastFpsAt = time.Now()
+	frameCount := 0
 
+	for {
 		select {
 		case <-exitChan:
 			fmt.Println("Exiting game loop...")
@@ -72,10 +77,15 @@ func main() {
 			screen.height = 10
 		}
 
-		if gameMap.cell(int(player.x), int(player.y)) == 'e' {
-			gameMap.regen()
-			player.init(float64(gameMap.startX), float64(gameMap.startY))
-			setStatus("到达出口! 新迷宫已生成")
+		now := time.Now()
+		frameCount++
+		if now.Sub(lastFpsAt) >= time.Second {
+			fps := float64(frameCount) / now.Sub(lastFpsAt).Seconds()
+			frameCount = 0
+			lastFpsAt = now
+			if now.UnixNano() >= statusUntil {
+				setStatus(fmt.Sprintf("FPS %.0f  位置(%d,%d)  迷宫 %dx%d", fps, int(player.y), int(player.x), gameMap.width, gameMap.height))
+			}
 		}
 
 		render()
@@ -83,8 +93,25 @@ func main() {
 	}
 }
 
+func newFrameWriter() []byte {
+	return make([]byte, 0, 64<<10)
+}
+
+func ensureBuffers(w, h int) {
+	if len(rows) != h || (h > 0 && len(rows[0]) != w) || len(colStart) != w {
+		rows = make([][]rune, h)
+		for y := 0; y < h; y++ {
+			rows[y] = make([]rune, w)
+		}
+		colStart = make([]int, w)
+		colEnd = make([]int, w)
+		colWallX = make([]float64, w)
+	}
+}
+
 func render() {
 	w, h := screen.width, screen.height
+	ensureBuffers(w, h)
 
 	dirX := math.Sin(player.angle)
 	dirY := math.Cos(player.angle)
@@ -95,17 +122,18 @@ func render() {
 	heightShift := int(player.camHeight * 6)
 	horizon := h/2 + pitchOffset + heightShift
 
-	colStart := make([]int, w)
-	colEnd := make([]int, w)
-	colWallX := make([]float64, w)
+	grid := gameMap.grid
+	mw, mh := gameMap.width, gameMap.height
+	px, py := player.x, player.y
+
+	const maxRaySteps = 1024
 
 	for x := 0; x < w; x++ {
 		cameraX := (2.0*float64(x)/float64(w) - 1.0) * settings.FOV
 		rayDirX := dirX + planeX*cameraX
 		rayDirY := dirY + planeY*cameraX
 
-		mapX := int(player.x)
-		mapY := int(player.y)
+		mapX, mapY := int(px), int(py)
 
 		var deltaDistX, deltaDistY, sideDistX, sideDistY float64
 		var stepX, stepY int
@@ -123,21 +151,17 @@ func render() {
 		}
 
 		if rayDirX < 0 {
-			stepX = -1
-			sideDistX = (player.x - float64(mapX)) * deltaDistX
+			stepX, sideDistX = -1, (px-float64(mapX))*deltaDistX
 		} else {
-			stepX = 1
-			sideDistX = (float64(mapX) + 1.0 - player.x) * deltaDistX
+			stepX, sideDistX = 1, (float64(mapX)+1.0-px)*deltaDistX
 		}
 		if rayDirY < 0 {
-			stepY = -1
-			sideDistY = (player.y - float64(mapY)) * deltaDistY
+			stepY, sideDistY = -1, (py-float64(mapY))*deltaDistY
 		} else {
-			stepY = 1
-			sideDistY = (float64(mapY) + 1.0 - player.y) * deltaDistY
+			stepY, sideDistY = 1, (float64(mapY)+1.0-py)*deltaDistY
 		}
 
-		for {
+		for steps := 0; steps < maxRaySteps; steps++ {
 			if sideDistX < sideDistY {
 				sideDistX += deltaDistX
 				mapX += stepX
@@ -147,18 +171,16 @@ func render() {
 				mapY += stepY
 				side = 1
 			}
-			if mapX < 0 || mapX >= gameMap.width || mapY < 0 || mapY >= gameMap.height {
+			if mapX < 0 || mapX >= mw || mapY < 0 || mapY >= mh {
 				break
 			}
-			if gameMap.cell(mapX, mapY) == '#' {
+			if grid[mapY*mw+mapX] == '#' {
 				break
 			}
 		}
 
-		perpWallDist := 0.0
-		if side == 0 {
-			perpWallDist = sideDistX - deltaDistX
-		} else {
+		perpWallDist := sideDistX - deltaDistX
+		if side == 1 {
 			perpWallDist = sideDistY - deltaDistY
 		}
 		if perpWallDist <= 0 {
@@ -167,9 +189,9 @@ func render() {
 
 		var wallX float64
 		if side == 0 {
-			wallX = player.y + perpWallDist*rayDirY
+			wallX = py + perpWallDist*rayDirY
 		} else {
-			wallX = player.x + perpWallDist*rayDirX
+			wallX = px + perpWallDist*rayDirX
 		}
 		wallX -= math.Floor(wallX)
 
@@ -188,12 +210,10 @@ func render() {
 		colWallX[x] = wallX
 	}
 
-	rows := make([][]rune, h)
 	for y := 0; y < h; y++ {
-		r := make([]rune, w)
+		r := rows[y]
 		for x := 0; x < w; x++ {
-			ds := colStart[x]
-			de := colEnd[x]
+			ds, de := colStart[x], colEnd[x]
 			ch := ' '
 			if y >= ds && y <= de {
 				wx := colWallX[x]
@@ -223,88 +243,80 @@ func render() {
 			}
 			r[x] = ch
 		}
-		rows[y] = r
 	}
 
 	if settings.showMinimap {
-		drawMinimap(rows, w, h)
+		drawMinimap(w, h)
 	}
 	if time.Now().UnixNano() < statusUntil {
-		drawStatus(rows, w, h)
+		drawStatus(w, h)
 	}
 
-	var out strings.Builder
-	out.WriteString("\x1b[H")
+	frameBuf = frameBuf[:0]
+	frameBuf = append(frameBuf, '\x1b', '[', 'H')
 	for y := 0; y < h; y++ {
-		out.WriteString(string(rows[y]))
-		out.WriteByte('\n')
+		r := rows[y]
+		for x := 0; x < w; x++ {
+			frameBuf = appendRune(frameBuf, r[x])
+		}
+		frameBuf = append(frameBuf, '\n')
 	}
-	fmt.Print(out.String())
+	os.Stdout.Write(frameBuf)
 }
 
-func drawMinimap(rows [][]rune, w, h int) {
+func appendRune(buf []byte, r rune) []byte {
+	if r < 0x80 {
+		return append(buf, byte(r))
+	}
+	return append(buf, string(r)...)
+}
+
+// drawMinimap 在屏幕左上角占 1/4 绘制玩家周围区域的小地图：
+// 四周用 | 围边，# 表示墙壁，P 表示玩家，空格表示空地
+func drawMinimap(w, h int) {
 	rw, rh := w/2, h/2
 	if rw < 8 || rh < 8 {
 		return
 	}
-
-	sx := (rw - 2) / gameMap.width
-	sy := (rh - 2) / gameMap.height
-	if sx < 1 {
-		sx = 1
-	}
-	if sy < 1 {
-		sy = 1
-	}
+	grid := gameMap.grid
+	mw, mh := gameMap.width, gameMap.height
 
 	for y := 0; y < rh; y++ {
 		for x := 0; x < rw; x++ {
 			if y == 0 || y == rh-1 || x == 0 || x == rw-1 {
-				ch := '+'
-				if y == 0 && x > 0 && x < rw-1 {
-					ch = '-'
-				} else if y == rh-1 && x > 0 && x < rw-1 {
-					ch = '-'
-				} else if x == 0 && y > 0 && y < rh-1 {
-					ch = '|'
-				} else if x == rw-1 && y > 0 && y < rh-1 {
-					ch = '|'
-				}
-				rows[y][x] = ch
+				rows[y][x] = '|'
 				continue
 			}
-			mapx := (x - 1) / sx
-			mapy := (y - 1) / sy
-			if mapx > gameMap.width-1 {
-				mapx = gameMap.width - 1
+			mapx := int(player.x) + (x - rw/2)
+			mapy := int(player.y) + (y - rh/2)
+			if mapx < 0 || mapx >= mw || mapy < 0 || mapy >= mh {
+				rows[y][x] = ' '
+				continue
 			}
-			if mapy > gameMap.height-1 {
-				mapy = gameMap.height - 1
-			}
-			switch gameMap.cell(mapx, mapy) {
-			case '#':
+			if grid[mapy*mw+mapx] == '#' {
 				rows[y][x] = '#'
-			case 'e':
-				rows[y][x] = 'E'
-			case 's':
-				rows[y][x] = 'S'
-			default:
-				rows[y][x] = '.'
+			} else {
+				rows[y][x] = ' '
 			}
 		}
 	}
-
-	px := 1 + int(player.x)*sx + sx/2
-	py := 1 + int(player.y)*sy + sy/2
-	if px > 0 && px < rw-1 && py > 0 && py < rh-1 {
-		rows[py][px] = '@'
-	}
+	rows[rh/2][rw/2] = 'P'
 }
 
-func drawStatus(rows [][]rune, w, h int) {
+func drawStatus(w, h int) {
 	if len(statusMsg) == 0 {
 		return
 	}
-	clear(rows[h-1])
-	copy(rows[h-1], []rune(statusMsg))
+	r := rows[h-1]
+	for i := range r {
+		r[i] = ' '
+	}
+	pos := 0
+	for _, c := range statusMsg {
+		if pos >= w {
+			break
+		}
+		r[pos] = c
+		pos++
+	}
 }

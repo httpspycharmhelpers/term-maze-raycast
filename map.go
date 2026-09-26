@@ -13,13 +13,13 @@ type Map struct {
 
 	startX int
 	startY int
-	exitX  int
-	exitY  int
 }
 
+// regen 生成一个自洽的完美迷宫（递归回溯），保证所有通路互相连通、
+// 绝不出现被墙封死的死路或孤岛。之后再随机拆墙（braiding）打通多份回环，
+// 让玩家随便逛都不会被困。尺寸自动归一为奇数。
 func (m *Map) regen() {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	w, h := 31, 31
+	w, h := 1501, 1501
 	if w%2 == 0 {
 		w++
 	}
@@ -33,41 +33,57 @@ func (m *Map) regen() {
 		grid[i] = '#'
 	}
 
-	type cell struct{ x, y int }
-	stack := []cell{{1, 1}}
-	grid[1*w+1] = ' '
-	dirs := [4][2]int{{2, 0}, {-2, 0}, {0, 2}, {0, -2}}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
+	// 递归回溯（迭代实现）：从 (1,1) 出发，以 2 格步长打通所有奇数格棋盘格
+	stack := make([]int, 1, w*h/8)
+	stack[0] = 1*w + 1
+	grid[1*w+1] = ' '
+
+	dirs := [4][2]int{{2, 0}, {-2, 0}, {0, 2}, {0, -2}}
 	for len(stack) > 0 {
-		cur := stack[len(stack)-1]
-		var nxt []cell
+		idx := stack[len(stack)-1]
+		x, y := idx%w, idx/w
+		var cand [4]int
+		n := 0
 		for _, d := range dirs {
-			nx, ny := cur.x+d[0], cur.y+d[1]
+			nx, ny := x+d[0], y+d[1]
 			if nx > 0 && nx < w-1 && ny > 0 && ny < h-1 && grid[ny*w+nx] == '#' {
-				nxt = append(nxt, cell{nx, ny})
+				cand[n] = ny*w + nx
+				n++
 			}
 		}
-		if len(nxt) == 0 {
+		if n == 0 {
 			stack = stack[:len(stack)-1]
 			continue
 		}
-		nc := nxt[rng.Intn(len(nxt))]
-		grid[(cur.y+(nc.y-cur.y)/2)*w+(cur.x+(nc.x-cur.x)/2)] = ' '
-		grid[nc.y*w+nc.x] = ' '
-		stack = append(stack, nc)
+		ni := cand[rng.Intn(n)]
+		ny, nx := ni/w, ni%w
+		grid[(y+(ny-y)/2)*w+(x+(nx-x)/2)] = ' '
+		grid[ni] = ' '
+		stack = append(stack, ni)
 	}
 
-	for i := 0; i < w*h/20; i++ {
+	// braiding：随机拆掉约 1/16 的内部墙，形成大量回环，消除长死胡同。
+	// 只拆「四邻中至少有一格空地」的墙 → 新空格必定并入现有通路，
+	// 绝不会拆出四围皆墙的孤立空格（不封死道路）。
+	attempts := w * h / 16
+	for i := 0; i < attempts; i++ {
 		x := rng.Intn(w-4) + 2
 		y := rng.Intn(h-4) + 2
-		grid[y*w+x] = ' '
+		idx := y*w + x
+		if grid[idx] != '#' {
+			continue
+		}
+		if grid[(y-1)*w+x] != ' ' && grid[(y+1)*w+x] != ' ' &&
+			grid[y*w+x-1] != ' ' && grid[y*w+x+1] != ' ' {
+			continue
+		}
+		grid[idx] = ' '
 	}
 
 	m.grid = grid
 	m.startX, m.startY = 1, 1
-	m.exitX, m.exitY = w-2, h-2
-	grid[m.startY*w+m.startX] = 's'
-	grid[m.exitY*w+m.exitX] = 'e'
 }
 
 func (m *Map) isWall(x, y int) bool {
@@ -75,13 +91,6 @@ func (m *Map) isWall(x, y int) bool {
 		return true
 	}
 	return m.grid[y*m.width+x] == '#'
-}
-
-func (m *Map) cell(x, y int) byte {
-	if x < 0 || x >= m.width || y < 0 || y >= m.height {
-		return '#'
-	}
-	return m.grid[y*m.width+x]
 }
 
 func clampF(v, lo, hi float64) float64 {

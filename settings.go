@@ -11,5 +11,5 @@ type Settings struct {
 func (s *Settings) init() {
 	s.FOV = 1.0
 	s.showMinimap = false
-	s.sleepTime = time.Millisecond * 16
+	s.sleepTime = time.Millisecond * 4
 }
