@@ -27,80 +27,68 @@ func (player *Player) init(sx, sy float64) {
 }
 
 const (
-	moveSpeed  = 4.0 // 格/秒
-	rotSpeed   = 0.7 // 弧度/秒
+	moveStep   = 0.5                    // 每按一次「前进/平移」立即移动的格数
+	rotStep    = 0.15                   // 每按一次「转向」立即转动的弧度
+	glideTime  = 250 * time.Millisecond // 按下一次后的平滑滑动时长
+	glideSpeed = 2.5                    // 松开后仍短缓移动的速率，格/秒
+	glideRot   = 0.6                    // 松开后仍短缓转动的速率，弧度/秒
 	heightStep = 0.15
 	pitchSpeed = 0.05
 	planeScale = 0.66
-	// 按键被视作“按住”的窗口时长：窗口内的每帧都按时间增量平滑移动，
-	// 兼容没有按键自动重复的终端（安卓/Termux 常见），单次点按也有一段平滑滑动
-	holdWindow = 400 * time.Millisecond
 )
 
 var heldMu sync.Mutex
-var heldAt = make(map[rune]time.Time)
+var pressCount = make(map[rune]uint32)
+var seenPress = make(map[rune]uint32)
+var glideStart = make(map[rune]time.Time)
 
-func keyHeld(r rune) bool {
-	heldMu.Lock()
-	defer heldMu.Unlock()
-	t, ok := heldAt[r]
-	return ok && time.Since(t) < holdWindow
-}
-
-// updatePlayer 由主循环每帧调用，按时间增量连续驱动移动与转向
+// updatePlayer 由主循环每帧调用：每个新按键立即走一步（即时响应），
+// 之后短时间按恒定速率平滑滑动，连续按住则无缝衔接成连续移动
 func updatePlayer(dt float64) {
 	dirX := math.Sin(player.angle)
 	dirY := math.Cos(player.angle)
 	planeX := math.Cos(player.angle) * planeScale
 	planeY := -math.Sin(player.angle) * planeScale
 
-	if keyHeld('1') {
-		player.angle -= rotSpeed * dt
+	heldMu.Lock()
+	var dx, dy, dAngle float64
+	move := func(r rune, sx, sy float64, vel float64) {
+		if n := pressCount[r] - seenPress[r]; n > 0 {
+			seenPress[r] = pressCount[r]
+			dx += sx * float64(n) * moveStep
+			dy += sy * float64(n) * moveStep
+			glideStart[r] = time.Now()
+		} else if t, ok := glideStart[r]; ok && time.Since(t) < glideTime {
+			dx += sx * vel * dt
+			dy += sy * vel * dt
+		}
 	}
-	if keyHeld('3') {
-		player.angle += rotSpeed * dt
+	turn := func(r rune, sign float64) {
+		if n := pressCount[r] - seenPress[r]; n > 0 {
+			seenPress[r] = pressCount[r]
+			dAngle += sign * float64(n) * rotStep
+			glideStart[r] = time.Now()
+		} else if t, ok := glideStart[r]; ok && time.Since(t) < glideTime {
+			dAngle += sign * glideRot * dt
+		}
 	}
+	move('2', dirX, dirY, glideSpeed)
+	move('8', -dirX, -dirY, glideSpeed)
+	move('4', -planeX, -planeY, glideSpeed)
+	move('6', planeX, planeY, glideSpeed)
+	turn('1', -1)
+	turn('3', +1)
+	heldMu.Unlock()
 
-	move := moveSpeed * dt
-	if keyHeld('2') {
-		nx := player.x + dirX*move
-		ny := player.y + dirY*move
-		if !gameMap.isWall(int(nx), int(player.y)) {
-			player.x = nx
-		}
-		if !gameMap.isWall(int(player.x), int(ny)) {
-			player.y = ny
-		}
+	player.angle += dAngle
+
+	nx := player.x + dx
+	ny := player.y + dy
+	if !gameMap.isWall(int(nx), int(player.y)) {
+		player.x = nx
 	}
-	if keyHeld('8') {
-		nx := player.x - dirX*move
-		ny := player.y - dirY*move
-		if !gameMap.isWall(int(nx), int(player.y)) {
-			player.x = nx
-		}
-		if !gameMap.isWall(int(player.x), int(ny)) {
-			player.y = ny
-		}
-	}
-	if keyHeld('4') {
-		nx := player.x - planeX*move
-		ny := player.y - planeY*move
-		if !gameMap.isWall(int(nx), int(player.y)) {
-			player.x = nx
-		}
-		if !gameMap.isWall(int(player.x), int(ny)) {
-			player.y = ny
-		}
-	}
-	if keyHeld('6') {
-		nx := player.x + planeX*move
-		ny := player.y + planeY*move
-		if !gameMap.isWall(int(nx), int(player.y)) {
-			player.x = nx
-		}
-		if !gameMap.isWall(int(player.x), int(ny)) {
-			player.y = ny
-		}
+	if !gameMap.isWall(int(player.x), int(ny)) {
+		player.y = ny
 	}
 }
 
@@ -123,9 +111,10 @@ func (player *Player) move() {
 			return
 
 		case '1', '3', '2', '8', '4', '6':
-			// 记录按下时刻，由主循环按帧持续时间平滑移动/转向
+			// 记一次按键：主循环按帧立即走一步并衔接平滑滑动
 			heldMu.Lock()
-			heldAt[char] = time.Now()
+			pressCount[char]++
+			glideStart[char] = time.Now()
 			heldMu.Unlock()
 
 		case '5':

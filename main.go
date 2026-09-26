@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -62,7 +63,13 @@ func main() {
 	}()
 
 	t0 := time.Now()
-	gameMap.regen()
+	size := 1000
+	if len(os.Args) > 1 {
+		if n, err := strconv.Atoi(os.Args[1]); err == nil && n > 0 {
+			size = n
+		}
+	}
+	gameMap.regen(size)
 	genMs := time.Since(t0).Milliseconds()
 
 	settings.init()

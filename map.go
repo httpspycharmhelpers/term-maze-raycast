@@ -18,8 +18,14 @@ type Map struct {
 // regen 生成一个自洽的完美迷宫（递归回溯），保证所有通路互相连通、
 // 绝不出现被墙封死的死路或孤岛。之后再随机拆墙（braiding）打通多份回环，
 // 让玩家随便逛都不会被困。尺寸自动归一为奇数。
-func (m *Map) regen() {
-	w, h := 1501, 1501
+func (m *Map) regen(size int) {
+	w, h := size, size
+	if w < 7 {
+		w = 7
+	}
+	if h < 7 {
+		h = 7
+	}
 	if w%2 == 0 {
 		w++
 	}

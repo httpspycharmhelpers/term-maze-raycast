@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-// 验证巨型迷宫：1) 生成耗时可控  2) 所有空地互相连通（无封死道路/无孤岛）
+// 验证巨型迷宫：1) 生成耗时可控  2) 所有空地互相连通（无封死道路/无孤岛）  3) 开局北/东开口
 func TestRegenConnectivityAndTiming(t *testing.T) {
 	start := time.Now()
 	var m Map
-	m.regen()
+	m.regen(1501)
 	gen := time.Since(start)
 	t.Logf("生成 %dx%d 迷宫用时 %v", m.width, m.height, gen)
 	if gen > 3*time.Second {
