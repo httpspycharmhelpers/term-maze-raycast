@@ -163,11 +163,12 @@ func drawCmdPanel(w, h int) bool {
 			topRow[i] = '-'
 		}
 	}
-	// 输出区：nvis 行，含滚动
-	nvis := ph - 3
-	if nvis < 1 {
-		nvis = 1
+	// 面板高度至少 3 行才有输出区/输入行/提示行的空间；
+	// ph<3 时只画分隔线，防止 rows 越界
+	if ph < 3 {
+		return true
 	}
+	nvis := ph - 3
 	ui.visible = nvis
 	totalOut := len(ui.out)
 	maxScroll := totalOut - nvis

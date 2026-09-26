@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eiannone/keyboard"
 )
@@ -251,6 +252,40 @@ func TestSaveLoadComplete(t *testing.T) {
 	if int(player.x) != 12 || int(player.y) != 14 || player.angle != 1.1 {
 		t.Errorf("载入后玩家状态不完整: %.1f,%.1f,%.1f", player.x, player.y, player.angle)
 	}
+}
+
+func TestPanelAnimNoPanic(t *testing.T) {
+	var m Map
+	m.regen(51)
+	gameMap = m
+	screen.width, screen.height = 177, 63
+	ensureBuffers(177, 63)
+	for i := 0; i < 200; i++ {
+		ui.out = append(ui.out, "xxxx")
+	}
+
+	// 打开动画：每 0.5ms 一个采样点，确保覆盖 ph=1/2 的极小高度
+	ui.active = false
+	ui.closing = false
+	var firstLine = time.Now().Add(-time.Second)
+	ui.openT = firstLine
+	for off := 0; off < 160; off++ {
+		ui.openT = time.Now().Add(-time.Duration(off) * 500 * time.Microsecond)
+		ui.active = true
+		_ = drawCmdPanel(177, 63)
+		if off == 0 { // 完全展开也要正常
+			ui.openT = firstLine
+		}
+	}
+
+	// 收起动画：逐步逼近完成时刻，覆盖 ph 递减到 1
+	ui.closing = true
+	for off := 0; off < 160; off++ {
+		ui.closeT = time.Now().Add(-time.Duration(off) * 500 * time.Microsecond)
+		_ = drawCmdPanel(177, 63)
+	}
+	ui.active = false
+	ui.closing = false
 }
 
 func TestEditModePersistence(t *testing.T) {
