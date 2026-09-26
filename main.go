@@ -84,11 +84,9 @@ func main() {
 	fmt.Printf("\x1b[?1049h\x1b[2J\x1b[?25l")
 	defer fmt.Printf("\x1b[?25h\x1b[?1049l")
 
-	var lastFpsAt = time.Now()
 	var lastTermCheck = time.Now()
 	var lastFrame = time.Now()
 	var lastDraw = time.Now()
-	frameCount := 0
 
 	for {
 		select {
@@ -115,16 +113,6 @@ func main() {
 					}
 					setStatus(fmt.Sprintf("终端已缩放: %dx%d", screen.width, screen.height))
 				}
-			}
-		}
-
-		frameCount++
-		if now.Sub(lastFpsAt) >= time.Second {
-			fps := float64(frameCount) / now.Sub(lastFpsAt).Seconds()
-			frameCount = 0
-			lastFpsAt = now
-			if now.UnixNano() >= statusUntil {
-				setStatus(fmt.Sprintf("FPS %.0f  位置(%d,%d)  迷宫 %dx%d", fps, int(player.y), int(player.x), gameMap.width, gameMap.height))
 			}
 		}
 
