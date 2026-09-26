@@ -25,6 +25,8 @@ var statusUntil int64
 var colStart, colEnd []int
 var colWallX []float64
 var rows [][]rune
+var prevRows [][]rune
+var rowDirty []bool
 var frameBuf = newFrameWriter()
 
 func termSize() (int, int) {
@@ -85,6 +87,7 @@ func main() {
 	var lastFpsAt = time.Now()
 	var lastTermCheck = time.Now()
 	var lastFrame = time.Now()
+	var lastDraw = time.Now()
 	frameCount := 0
 
 	for {
@@ -134,7 +137,11 @@ func main() {
 		lastFrame = now
 		updatePlayer(dt)
 
-		render()
+		// 增量绘屏 + 重绘节流：画面无变化时不写任何字节；有变化也最多 ~40fps
+		if time.Since(lastDraw) >= settings.drawInterval {
+			render()
+			lastDraw = time.Now()
+		}
 
 		// 固定帧节拍：一帧超时则不睡（追赶），否则睡到 ~66fps，
 		// 帧间隔恒定 → 平滑无卡顿，也避免高帧率全屏重绘导致的抖动
@@ -154,6 +161,11 @@ func ensureBuffers(w, h int) (resized bool) {
 		for y := 0; y < h; y++ {
 			rows[y] = make([]rune, w)
 		}
+		prevRows = make([][]rune, h)
+		for y := 0; y < h; y++ {
+			prevRows[y] = make([]rune, w)
+		}
+		rowDirty = make([]bool, h)
 		colStart = make([]int, w)
 		colEnd = make([]int, w)
 		colWallX = make([]float64, w)
@@ -309,15 +321,38 @@ func render() {
 	if resized {
 		frameBuf = append(frameBuf, '\x1b', '[', '2', 'J')
 	}
-	frameBuf = append(frameBuf, '\x1b', '[', 'H')
+	anyChange := resized
 	for y := 0; y < h; y++ {
+		r, p := rows[y], prevRows[y]
+		d := false
+		for x := 0; x < w; x++ {
+			if r[x] != p[x] {
+				d = true
+				break
+			}
+		}
+		rowDirty[y] = d
+		if d {
+			anyChange = true
+		}
+	}
+	if !anyChange {
+		return
+	}
+
+	// 只重写发生变化的行，终端不被整屏刷新淹没
+	for y := 0; y < h; y++ {
+		if !rowDirty[y] {
+			continue
+		}
+		frameBuf = append(frameBuf, '\x1b', '[')
+		frameBuf = append(frameBuf, strconv.Itoa(y+1)...)
+		frameBuf = append(frameBuf, ';', '1', 'H')
 		r := rows[y]
 		for x := 0; x < w; x++ {
 			frameBuf = appendRune(frameBuf, r[x])
 		}
-		if y < h-1 {
-			frameBuf = append(frameBuf, '\n')
-		}
+		copy(prevRows[y], r)
 	}
 	os.Stdout.Write(frameBuf)
 }
