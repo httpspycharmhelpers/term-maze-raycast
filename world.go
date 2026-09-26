@@ -387,8 +387,15 @@ func drawEditWindow(w, h int) {
 				rows[y][x] = 'D'
 				continue
 			}
+			if _, _, im := imgLinkAt(gx, gy); im != nil {
+				rows[y][x] = 'I'
+				continue
+			}
 			if grid[gy*mw+gx] == '#' {
 				rows[y][x] = '#'
+				if len(gameMap.egg) == len(grid) && gameMap.egg[gy*mw+gx] != 0 {
+					rows[y][x] = '%'
+				}
 			} else {
 				rows[y][x] = ' '
 			}

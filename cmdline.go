@@ -238,7 +238,6 @@ func runCmd(args []string, stdin []byte) cmdResult {
 
 var unimplemented = map[string]bool{
 	"grab": true, "place": true,
-	"img": true, "video": true,
 }
 
 func isUnimplemented(name string) bool {

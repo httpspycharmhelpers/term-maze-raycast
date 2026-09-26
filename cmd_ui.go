@@ -154,20 +154,27 @@ func drawCmdPanel(w, h int) bool {
 		return false
 	}
 	top := h - ph
-	// 顶部分隔线
-	topRow := rows[top]
-	for i := range topRow {
-		if i == 0 || i == w-1 {
-			topRow[i] = '+'
-		} else {
-			topRow[i] = '-'
+	borderRow := func(idx int) {
+		r := rows[idx]
+		for i := range r {
+			if i == 0 || i == w-1 {
+				r[i] = '+'
+			} else {
+				r[i] = '-'
+			}
 		}
 	}
-	// 面板高度至少 3 行才有输出区/输入行/提示行的空间；
-	// ph<3 时只画分隔线，防止 rows 越界
+	// 顶部分隔线
+	borderRow(top)
+	// 底部对称分隔线：ph>=2 时也画，保证上下边框成对
+	if ph >= 2 {
+		borderRow(top + ph - 1)
+	}
 	if ph < 3 {
 		return true
 	}
+	// 面板高度至少 3 行才有输出区/输入行/提示行的空间；
+	// ph<3 时只画分隔线，防止 rows 越界
 	nvis := ph - 3
 	ui.visible = nvis
 	totalOut := len(ui.out)
@@ -190,7 +197,7 @@ func drawCmdPanel(w, h int) bool {
 		r := rows[top+1+i]
 		fillPanelRow(r, w, ui.out[start+i])
 	}
-	// 输入行
+	// 输入行（在底边框上一行）
 	promptRune := []rune("> ")
 	full := append([]rune{}, promptRune...)
 	full = append(full, ui.buf...)
@@ -201,17 +208,29 @@ func drawCmdPanel(w, h int) bool {
 	if promptLen < w-2 {
 		inRow[1+promptLen] = cursorRune
 	}
-	// 底部提示行：面板完全展开后才显示
-	if ph >= total {
-		hint := "PgUp/PgDn 或 Ctrl+U/D 滚动  | 管道 && ; ||  ↑↓历史 ESC收起"
-		if ui.scroll > 0 || totalOut > nvis {
-			hint = fmt.Sprintf("输出 %d..%d/%d  ↑", start+1, start+nvis, totalOut) + "  | " + hint
-		}
+	// 底部提示行并入输入行右侧：滚动范围提示紧跟 prompt，避免单独占一行
+	hint := ""
+	if ui.scroll > 0 || totalOut > nvis {
+		hint = fmt.Sprintf("[%d..%d/%d↑]", start+1, start+nvis, totalOut)
+	}
+	if hint != "" {
 		hintRune := []rune(hint)
-		hRow := rows[top+ph-1]
-		fillPanelRow(hRow, w, "")
-		for i := 0; i < len(hintRune) && 1+i < w-1; i++ {
-			hRow[1+i] = hintRune[i]
+		base := 1 + promptLen + 1
+		for i := 0; i < len(hintRune) && base+i < w-2; i++ {
+			inRow[base+i] = hintRune[i]
+		}
+	}
+	// 按键帮助放在顶分隔线下一行的行尾
+	if ph >= total && ph >= 4 {
+		keys := "PgUp/PgDn或Ctrl+U/D滚动 ↑↓历史 ESC收起"
+		keysRune := []rune(keys)
+		r := rows[top+1]
+		base := w - 2 - len(keysRune)
+		if base < 2 {
+			base = 2
+		}
+		for i := 0; i < len(keysRune) && base+i < w-1; i++ {
+			r[base+i] = keysRune[i]
 		}
 	}
 	return true
@@ -272,6 +291,8 @@ var builtins = map[string]builtinFunc{
 	"goto":      cmdGoto,
 	"elevator":  cmdElevator,
 	"edit":      cmdEdit,
+	"img":       cmdImg,
+	"video":     cmdVideo,
 }
 
 func cmdHelp(_ []string) (string, int) {
@@ -293,6 +314,10 @@ func cmdHelp(_ []string) (string, int) {
   save [名]      存为 ~/ 名.rmap (RAMAP)
   load [名]      载入 ~/ 名.rmap
   file <路径>    识别文件是否为本游戏存档
+  img load <文件> [x y] 贴ASCII图到墙面
+  img list|remove <id>  查看/卸载贴图
+  video play <文件> [x y] 墙面播放ASCII视频
+  video stop|list|remove <id>
   |  管道   && 和   || 或   ; 依次   引号 "  '`, 0
 }
 

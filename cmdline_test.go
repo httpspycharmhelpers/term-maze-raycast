@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -325,5 +326,131 @@ func TestEditModePersistence(t *testing.T) {
 	handleEditKey('Q', keyboard.Key(0))
 	if editMode {
 		t.Errorf("Q 应退出编辑模式")
+	}
+}
+
+func TestEggWalls(t *testing.T) {
+	var m Map
+	m.regen(61)
+	if m.egg == nil || len(m.egg) != len(m.grid) {
+		t.Fatalf("egg 数组未初始化")
+	}
+	total, hit := 0, 0
+	inside := 0
+	for i, c := range m.grid {
+		if c == '#' {
+			total++
+			if m.egg[i] > 0 {
+				hit++
+				if m.egg[i] >= len(eggPatterns) {
+					t.Errorf("彩蛋索引越界 %d", m.egg[i])
+				}
+			}
+			if i >= m.width && i < len(m.grid)-m.width && i%m.width != 0 && i%m.width != m.width-1 {
+				inside++
+			}
+		}
+	}
+	_ = inside
+	if total == 0 {
+		t.Fatalf("迷宫没有墙")
+	}
+	if hit == 0 {
+		t.Errorf("61 号种子没有任何彩蛋墙")
+	}
+	f := float64(hit) / float64(total)
+	if f < 0.02 || f > 0.2 {
+		t.Errorf("彩蛋比例 %.3f 偏离约 9%% 太多", f)
+	}
+	// 彩蛋只出现在墙格
+	for i, e := range m.egg {
+		if e > 0 && m.grid[i] != '#' {
+			t.Fatalf("非墙格 %d 被标为彩蛋", i)
+		}
+	}
+}
+
+func TestImgVideoCommands(t *testing.T) {
+	dir := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", oldHome)
+	defer func() { wallImages = nil; videos = nil }()
+
+	art := "AA\n BB\n"
+	vid := "111\n111\n---\n222\n222\n"
+	if err := os.WriteFile(filepath.Join(dir, "art.txt"), []byte(art), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "vid.txt"), []byte(vid), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg, code := cmdImg([]string{"load", "art.txt", "3", "3"})
+	if code != 0 {
+		t.Fatalf("img load 失败: %s", msg)
+	}
+	if len(wallImages) != 1 || wallImages[0].X != 3 || wallImages[0].Y != 3 {
+		t.Fatalf("贴图未生效: %+v", wallImages)
+	}
+	if wallImages[0].W != 3 || wallImages[0].H != 2 {
+		t.Fatalf("尺寸错误: %+v", wallImages[0])
+	}
+
+	_, code = cmdVideo([]string{"play", "vid.txt", "5", "5"})
+	if code != 0 {
+		t.Fatalf("video play 失败")
+	}
+	if len(videos) != 1 || !videos[0].Playing || len(videos[0].Frames) != 2 {
+		t.Fatalf("视频未生效: %+v", videos)
+	}
+	kt, _, im := imgLinkAt(5, 5)
+	if kt != 1 || im == nil {
+		t.Fatalf("播放中视频应优先命中的墙面")
+	}
+
+	_, code = cmdVideo([]string{"stop", "1"})
+	if code != 0 || videos[0].Playing {
+		t.Fatalf("stop 失败")
+	}
+	_, code = cmdVideo([]string{"remove", "1"})
+	if code != 0 || len(videos) != 0 {
+		t.Fatalf("remove 失败")
+	}
+	_, code = cmdImg([]string{"remove", "1"})
+	if code != 0 || len(wallImages) != 0 {
+		t.Fatalf("img remove 失败")
+	}
+	if _, code := cmdImg([]string{"load", "not-exist.txt", "1", "1"}); code == 0 {
+		t.Fatalf("缺失文件应报错")
+	}
+	// 绝对路径在 HOME 之外被拒绝
+	if _, code := cmdImg([]string{"load", "/etc/hosts", "1", "1"}); code == 0 {
+		t.Fatalf("应阻止访问 HOME 之外")
+	}
+	if _, code := cmdImg([]string{"load", "../etc/hosts", "1", "1"}); code == 0 {
+		t.Fatalf("应阻止越界路径")
+	}
+}
+
+func TestJump(t *testing.T) {
+	player.init(1, 1)
+	px := player.x
+	player.jumpV = jumpVel
+	maxH := 0.0
+	for i := 0; i < 200; i++ {
+		updatePlayer(0.02)
+		if player.jumpY > maxH {
+			maxH = player.jumpY
+		}
+	}
+	if maxH < 0.3 {
+		t.Errorf("跳跃高度应至少 0.3，实际 %.3f", maxH)
+	}
+	if player.jumpY != 0 || player.jumpV != 0 {
+		t.Errorf("跳跃应落回地面，实际 jumpY=%.3f jumpV=%.3f", player.jumpY, player.jumpV)
+	}
+	if player.x != px {
+		t.Errorf("跳跃不应改变水平位置")
 	}
 }

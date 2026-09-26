@@ -11,9 +11,20 @@ type Map struct {
 	height int
 	grid   []byte
 	seed   int64
+	egg    []int // 彩蛋墙：0=普通墙，1+ = eggPatterns 索引
 
 	startX int
 	startY int
+}
+
+// fillEggs 约 9% 的墙格变成随机对称花纹彩蛋墙
+func (m *Map) fillEggs(rng *rand.Rand) {
+	m.egg = make([]int, len(m.grid))
+	for i, c := range m.grid {
+		if c == '#' && rng.Float64() < 0.09 {
+			m.egg[i] = 1 + rng.Intn(len(eggPatterns)-1)
+		}
+	}
 }
 
 // regen 生成一个自洽的完美迷宫（递归回溯），保证所有通路互相连通、
@@ -95,6 +106,8 @@ func (m *Map) regenSeed(size int, seed int64) {
 	}
 
 	m.grid = grid
+	// 约 9% 墙格随机变成彩蛋花纹墙（推测用 rng 保证与迷宫同源、可复现）
+	m.fillEggs(rng)
 	m.startX, m.startY = 1, 1
 	// 开局通道：确定性地挖开出生点北、东两侧，
 	// 让玩家每次开局都能立刻前进/右移，不会顶着墙面抱怨“动不了”
@@ -126,6 +139,7 @@ func (m *Map) makeFlat(n int) {
 	}
 	m.width, m.height = w, h
 	m.grid = grid
+	m.egg = make([]int, len(grid))
 	m.startX, m.startY = 1, 1
 	m.seed = time.Now().UnixNano()
 }

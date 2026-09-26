@@ -24,6 +24,8 @@ var statusUntil int64
 // 渲染缓冲跨帧复用，避免每帧分配，提升性能
 var colStart, colEnd []int
 var colWallX []float64
+var colEgg []int
+var colImg []*WallImage
 var rows [][]rune
 var prevRows [][]rune
 var rowDirty []bool
@@ -158,6 +160,8 @@ func ensureBuffers(w, h int) (resized bool) {
 		colStart = make([]int, w)
 		colEnd = make([]int, w)
 		colWallX = make([]float64, w)
+		colEgg = make([]int, w)
+		colImg = make([]*WallImage, w)
 		return true
 	}
 	return false
@@ -173,7 +177,7 @@ func render() {
 	planeY := -math.Sin(player.angle) * planeScale
 
 	pitchOffset := int(float64(h) * player.pitch * 0.4)
-	heightShift := int(player.camHeight * 6)
+	heightShift := int((player.camHeight + player.jumpY*0.6) * 6)
 	horizon := h/2 + pitchOffset + heightShift
 
 	grid := gameMap.grid
@@ -264,6 +268,17 @@ func render() {
 		colStart[x] = drawStart
 		colEnd[x] = drawEnd
 		colWallX[x] = wallX
+		colEgg[x] = 0
+		colImg[x] = nil
+		if mapX >= 0 && mapX < mw && mapY >= 0 && mapY < mh {
+			ci := mapY*mw + mapX
+			if len(gameMap.egg) == len(grid) && gameMap.egg[ci] != 0 {
+				colEgg[x] = gameMap.egg[ci]
+			}
+			if _, _, im := imgLinkAt(mapX, mapY); im != nil {
+				colImg[x] = im
+			}
+		}
 	}
 
 	for y := 0; y < h; y++ {
@@ -280,19 +295,23 @@ func render() {
 				isVertical := edge < 0.08
 				isHorizontal := y == ds || y == de
 				pal := wallPalettes[wallStyle]
-				switch {
-				case isVertical && isHorizontal:
-					ch = pal[4]
-				case isVertical:
-					ch = pal[0]
-				case isHorizontal:
+				if im, ok := mediaRune(colImg[x], colEgg[x], wx, y, ds, de); ok {
+					ch = im
+				} else {
 					switch {
-					case player.pitch > 0.05:
-						ch = pal[2]
-					case player.pitch < -0.05:
-						ch = pal[3]
-					default:
-						ch = pal[1]
+					case isVertical && isHorizontal:
+						ch = pal[4]
+					case isVertical:
+						ch = pal[0]
+					case isHorizontal:
+						switch {
+						case player.pitch > 0.05:
+							ch = pal[2]
+						case player.pitch < -0.05:
+							ch = pal[3]
+						default:
+							ch = pal[1]
+						}
 					}
 				}
 			} else if y >= horizon {
@@ -386,8 +405,19 @@ func drawMinimap(w, h int) {
 				rows[y][x] = 'D'
 				continue
 			}
+			if v, _, im := imgLinkAt(mapx, mapy); im != nil {
+				if v == 1 {
+					rows[y][x] = 'V'
+				} else {
+					rows[y][x] = 'I'
+				}
+				continue
+			}
 			if grid[mapy*mw+mapx] == '#' {
 				rows[y][x] = '#'
+				if len(gameMap.egg) == len(grid) && gameMap.egg[mapy*mw+mapx] != 0 {
+					rows[y][x] = '%'
+				}
 			} else {
 				rows[y][x] = ' '
 			}

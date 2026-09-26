@@ -16,6 +16,8 @@ type Player struct {
 	angle     float64
 	pitch     float64
 	camHeight float64
+	jumpY     float64 // 跳跃高度偏移（格）
+	jumpV     float64 // 垂直速度（格/秒）
 }
 
 func (player *Player) init(sx, sy float64) {
@@ -24,6 +26,8 @@ func (player *Player) init(sx, sy float64) {
 	player.angle = 0.0
 	player.pitch = 0.0
 	player.camHeight = 0.0
+	player.jumpY = 0
+	player.jumpV = 0
 }
 
 const (
@@ -35,12 +39,17 @@ const (
 	heightStep = 0.15
 	pitchSpeed = 0.05
 	planeScale = 0.66
+	jumpVel    = 5.5 // 起跳垂直速度，格/秒
+	jumpG      = 20  // 重力加速度
 )
 
 var heldMu sync.Mutex
 var pressCount = make(map[rune]uint32)
 var seenPress = make(map[rune]uint32)
 var glideStart = make(map[rune]time.Time)
+
+// jumpNext 由 move() 的空格键触发，updatePlayer 每帧消费一次并接上重力
+var jumpNext bool
 
 // updatePlayer 由主循环每帧调用：每个新按键立即走一步（即时响应），
 // 之后短时间按恒定速率平滑滑动，连续按住则无缝衔接成连续移动
@@ -78,6 +87,22 @@ func updatePlayer(dt float64) {
 	move('6', planeX, planeY, glideSpeed)
 	turn('1', -1)
 	turn('3', +1)
+	// 空格 = 跳跃（跳跃中不可再起跳）
+	if jumpNext {
+		jumpNext = false
+		if player.jumpY <= 0 && player.jumpV <= 0 {
+			player.jumpV = jumpVel
+		}
+	}
+	// 重力积分
+	if player.jumpV != 0 || player.jumpY > 0 {
+		player.jumpV -= jumpG * dt
+		player.jumpY += player.jumpV * dt
+		if player.jumpY < 0 {
+			player.jumpY = 0
+			player.jumpV = 0
+		}
+	}
 	heldMu.Unlock()
 
 	player.angle += dAngle
@@ -154,6 +179,9 @@ func (player *Player) move() {
 			pressCount[char]++
 			glideStart[char] = time.Now()
 			heldMu.Unlock()
+
+		case ' ':
+			jumpNext = true
 
 		case '5':
 			player.camHeight = clampF(player.camHeight+heightStep, -2.0, 2.0)
