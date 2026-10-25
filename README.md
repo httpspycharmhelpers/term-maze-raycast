@@ -5,7 +5,7 @@ Go 版 raycast 风格 3D 迷宫：融合
 - [raycast-game](https://github.com/httpspycharmhelpers/raycast-game) — 画面与操作：墙壁 / 天花板 / 地板 / 俯仰 / 视高 / 视野的 DDA 光线投射渲染，按键布局完全一致
 - [term-maze-3d](https://github.com/Yadav106/termi-maze-3d) — 迷宫玩法：随机迷宫、自由探索
 
-用 Go 实现，零第三方图像库，仅依赖 `eiannone/keyboard`（按键）与 `x/sys/unix`（终端尺寸）。
+面向 Linux 终端的 Go 实现，零第三方图像库，仅依赖 `eiannone/keyboard`（按键）与 `x/sys/unix`（终端尺寸）。
 
 ## 画面
 
@@ -24,10 +24,10 @@ Go 版 raycast 风格 3D 迷宫：融合
 - 生成提速：一次开传奇数格棋盘空间，命中率恒定，大尺寸迷宫数百毫秒内完成
 - 渲染提速：列缓冲 / 行缓冲 / 帧缓冲跨帧复用，零每帧分配；光线给 512 步上限防长走廊卡顿
 - 帧率：输入以 ~60Hz 节拍更新（手感不变），画面**增量重绘**、上限约 40fps —— 只在内容变化时才向终端发送该行，画面静止时一字节都不写，终端不再被每秒数百 KB 整屏刷新淹没，画面稳且顺（状态行只保留开机按键提示与「小地图开/关」「视野」等瞬时信息，不显示 FPS/坐标）
-- 关于“硬件加速”：终端游戏由终端自身（GPU 加速的文本渲染）绘制画面，游戏只需喂字节流；Termux 仅提供软件 GL（mesa/swrast），真用 GPU 需改写成原生窗口 App，对 ASCII 光线投射无实际收益，故不采用
+- 关于“硬件加速”：终端游戏由终端自身（GPU 加速的文本渲染）绘制画面，游戏只需喂字节流，因此保持纯软件实现，不引入 GL/窗口库
 - 画面稳定：终端尺寸每 100ms 采样一次并保持稳定，弹出软键盘/瞬时抖动不会导致画面来回跳动；尺寸真正变化时清屏一次，不乱码
 - 按键：`1` 右转、`3` 左转
-- 移动/转向即时响应：每按一次键立刻走一步（按住可连续移动），松开后做 250ms 的平滑滑动衔接，不依赖终端按键自动重复，安卓/Termux 上也顺滑
+- 移动/转向即时响应：每按一次键立刻走一步（按住可连续移动），松开后做 250ms 的平滑滑动衔接，不依赖终端按键自动重复，Linux 桌面终端上也顺滑
 - 开局通道固定打通：出生点北、东两侧始终有三条可行走路径，不会开局顶着墙
 - 退出（`q` 或 Ctrl-C）会完整恢复终端回显与行模式，退出后照常输入
 - 小地图为玩家周围区域的局部视图（占用屏幕左上的 1/4），成本与迷宫大小无关
@@ -73,7 +73,7 @@ Go 版 raycast 风格 3D 迷宫：融合
 | edit / edit off | 进入/退出编辑模式（Q 退出） |
 | img load <文件> \[x y\] | 贴图片到墙面：`.png/.jpg/.gif` 自动转**彩色** ASCII（真彩背景），其余当文本画；缺省自动找玩家附近的墙放置 |
 | img list / remove <id> | list 同时列出 `~/` 下的图片文件与已贴图 / 卸载贴图 |
-| video play <文件> \[x y\] | 墙面播放：`.mp4` 用 ffmpeg 抽帧转 ASCII 真彩 10fps 且**带音轨**（音频优先 termux-media-player，其次 ffplay；只有 ffmpeg 一个必需外部工具）；`.gif`/`.png`/`.jpg` 纯 Go 标准库解码；文本格式帧之间用 `---` 行分隔。可同时播放多个视频 |
+| video play <文件> \[x y\] | 墙面播放：`.mp4` 用 ffmpeg 抽帧转 ASCII 真彩 10fps 且**带音轨**（音频优先 ffplay，其次 termux-media-player；只有 ffmpeg 一个必需外部工具，且仅 mp4 需要）；`.gif`/`.png`/`.jpg` 纯 Go 标准库解码；文本格式帧之间用 `---` 行分隔。可同时播放多个视频 |
 | video stop \[id\] | 停止播放（省略 id 停止全部，含音轨） |
 | video remove <id\|all> / img remove <id\|all> | 删除贴墙视频/图片 |
 | video list | 查看正在播放的视频（同时列出 `~/` 下的 gif/mp4） |
@@ -88,8 +88,9 @@ Go 版 raycast 风格 3D 迷宫：融合
 ## 构建运行
 
 ```bash
-# Termux
-pkg install golang
+# Linux（Debian/Ubuntu；Fedora 用 dnf，Arch 用 pacman）
+sudo apt install golang
+# Termux（Android）用：pkg install golang
 cd term-maze-raycast
 go build -o term-maze-raycast .
 ./term-maze-raycast                 # 默认 1000×1000

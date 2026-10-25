@@ -615,7 +615,7 @@ func cmdVideo(args []string) (string, int) {
 				if player != "" {
 					src += fmt.Sprintf(" + 音轨(%s播放)", player)
 				} else {
-					src += "，无音频播放器(termux-media-player/ffplay)"
+					src += "，无音频播放器(ffplay/termux-media-player)"
 				}
 			}
 			if len(frames) >= maxVideoFrames {

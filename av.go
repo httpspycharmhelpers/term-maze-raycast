@@ -13,7 +13,7 @@ import (
 )
 
 // ffmpeg 集成：mp4 用 ffmpeg 自身探测元数据并抽帧，音频交给系统播放器。
-// Termux 安装：pkg install ffmpeg
+// Linux 安装：apt install ffmpeg（Fedora: dnf install ffmpeg；Arch: pacman -S ffmpeg）
 
 const maxVideoFrames = 6000
 
@@ -24,7 +24,7 @@ func findFF() (ffmpeg, ffplay string, err error) {
 	ffmpeg, _ = exec.LookPath("ffmpeg")
 	ffplay, _ = exec.LookPath("ffplay")
 	if ffmpeg == "" {
-		return "", "", fmt.Errorf("需要 ffmpeg（Termux: pkg install ffmpeg）")
+		return "", "", fmt.Errorf("需要 ffmpeg（Debian/Ubuntu: sudo apt install ffmpeg；Fedora: sudo dnf install ffmpeg；Arch: sudo pacman -S ffmpeg）")
 	}
 	return ffmpeg, ffplay, nil
 }
@@ -163,8 +163,8 @@ func mp4ToFrames(path string) (frames []WallImage, fps int, hasAudio bool, err e
 // startAudio 后台播放音轨；按可用工具依次尝试，返回子进程与所用播放器名
 func startAudio(path string) (*exec.Cmd, string) {
 	players := [][]string{
-		{"termux-media-player", "play"},
 		{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-vn"},
+		{"termux-media-player", "play"},
 	}
 	for _, argv := range players {
 		if _, err := exec.LookPath(argv[0]); err != nil {
