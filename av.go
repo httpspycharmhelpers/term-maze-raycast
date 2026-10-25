@@ -1,110 +1,83 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// ffmpeg 集成：mp4 用 ffprobe 探测、ffmpeg 抽帧成 ASCII 真彩帧、ffplay 放音轨。
+// ffmpeg 集成：mp4 用 ffmpeg 自身探测元数据并抽帧，音频交给系统播放器。
 // Termux 安装：pkg install ffmpeg
 
 const maxVideoFrames = 6000
 
 var videoRamp = []rune(" .·:;!%#@")
 
-// findFF 返回三个可执行文件路径；缺失时给出安装提示
-func findFF() (ffmpeg, ffprobe, ffplay string, err error) {
+// findFF 返回 ffmpeg 路径（ffplay 可选，仅用于音频播放）
+func findFF() (ffmpeg, ffplay string, err error) {
 	ffmpeg, _ = exec.LookPath("ffmpeg")
-	ffprobe, _ = exec.LookPath("ffprobe")
 	ffplay, _ = exec.LookPath("ffplay")
-	if ffmpeg == "" || ffprobe == "" {
-		return "", "", "", fmt.Errorf("需要 ffmpeg + ffprobe（Termux: pkg install ffmpeg）")
+	if ffmpeg == "" {
+		return "", "", fmt.Errorf("需要 ffmpeg（Termux: pkg install ffmpeg）")
 	}
-	return ffmpeg, ffprobe, ffplay, nil
+	return ffmpeg, ffplay, nil
 }
 
 type ffStreamInfo struct {
 	Width, Height  int
-	Duration       string
-	AvgFrameRate   string
-	NumFrames      string
+	FPS            float64
 	HasAudioStream bool
 }
 
-func (s *ffStreamInfo) duration() float64 {
-	f, _ := strconv.ParseFloat(s.Duration, 64)
-	return f
-}
-
-// fps 解析 "30/1" 或 "30000/1001"
-func (s *ffStreamInfo) fps() float64 {
-	a := strings.SplitN(s.AvgFrameRate, "/", 2)
-	if len(a) == 2 {
-		n, err1 := strconv.ParseFloat(a[0], 64)
-		d, err2 := strconv.ParseFloat(a[1], 64)
-		if err1 == nil && err2 == nil && d > 0 {
-			return n / d
+// probeVideo 用 ffmpeg -i 的 stderr 解析分辨率、帧率与音轨（不再依赖 ffprobe）
+func probeVideo(ffmpeg, path string) (info ffStreamInfo, err error) {
+	out, _ := exec.Command(ffmpeg, "-hide_banner", "-i", path).CombinedOutput()
+	text := string(out)
+	reStream := regexp.MustCompile(`(?m)^\s*Stream #\d+:\d+.*?(Video|Audio):.*$`)
+	reSize := regexp.MustCompile(`,\s*(\d{2,5})x(\d{2,5})(?:[\s,\[]|$)`)
+	reFPS := regexp.MustCompile(`([\d.]+)\s*fps`)
+	for _, line := range strings.Split(text, "\n") {
+		if !reStream.MatchString(line) {
+			continue
 		}
-	}
-	f, _ := strconv.ParseFloat(s.AvgFrameRate, 64)
-	return f
-}
-
-// probeVideo 探测视频信息并检查是否有音轨
-func probeVideo(ffprobe, path string) (info ffStreamInfo, err error) {
-	out, err := exec.Command(ffprobe, "-v", "error",
-		"-show_entries", "stream=codec_type,width,height,duration,nb_frames,avg_frame_rate",
-		"-of", "json", path).Output()
-	if err != nil {
-		return info, fmt.Errorf("ffprobe 失败: %v", err)
-	}
-	var resp struct {
-		Streams []struct {
-			CodecType     string `json:"codec_type"`
-			Width, Height int
-			Duration      string
-			AvgFrameRate  string
-			NbFrames      string `json:"nb_frames"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return info, fmt.Errorf("ffprobe 输出无法解析: %v", err)
-	}
-	for _, s := range resp.Streams {
-		switch s.CodecType {
-		case "video":
-			info.Width = s.Width
-			info.Height = s.Height
-			info.Duration = s.Duration
-			info.AvgFrameRate = s.AvgFrameRate
-			info.NumFrames = s.NbFrames
-		case "audio":
+		if strings.Contains(line, "Audio:") {
 			info.HasAudioStream = true
+			continue
+		}
+		if strings.Contains(line, "Video:") && info.Width == 0 {
+			if m := reSize.FindStringSubmatch(line); len(m) == 3 {
+				info.Width, _ = strconv.Atoi(m[1])
+				info.Height, _ = strconv.Atoi(m[2])
+			}
+			if m := reFPS.FindStringSubmatch(line); len(m) == 2 {
+				info.FPS, _ = strconv.ParseFloat(m[1], 64)
+			}
 		}
 	}
 	if info.Width <= 0 || info.Height <= 0 {
-		return info, fmt.Errorf("没有找到视频流")
+		return info, fmt.Errorf("没有找到视频流（ffmpeg 是否已安装？）")
 	}
 	return info, nil
 }
 
 // mp4ToFrames 用 ffmpeg 把 mp4 抽成 10fps 的 ASCII 真彩帧（W 列、按 2:1 换算行数）
 func mp4ToFrames(path string) (frames []WallImage, fps int, hasAudio bool, err error) {
-	ffmpeg, ffprobe, _, err := findFF()
+	ffmpeg, _, err := findFF()
 	if err != nil {
 		return nil, 0, false, err
 	}
-	info, err := probeVideo(ffprobe, path)
+	info, err := probeVideo(ffmpeg, path)
 	if err != nil {
 		return nil, 0, false, err
 	}
 	hasAudio = info.HasAudioStream
-	srcFPS := info.fps()
+	srcFPS := info.FPS
 	fps = 10
 	if srcFPS > 0 && srcFPS < float64(fps) {
 		fps = int(srcFPS)
@@ -190,9 +163,8 @@ func mp4ToFrames(path string) (frames []WallImage, fps int, hasAudio bool, err e
 // startAudio 后台播放音轨；按可用工具依次尝试，返回子进程与所用播放器名
 func startAudio(path string) (*exec.Cmd, string) {
 	players := [][]string{
-		{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-vn"},
-		{"mpv", "--no-video", "--really-quiet"},
 		{"termux-media-player", "play"},
+		{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-vn"},
 	}
 	for _, argv := range players {
 		if _, err := exec.LookPath(argv[0]); err != nil {
@@ -209,12 +181,20 @@ func startAudio(path string) (*exec.Cmd, string) {
 }
 
 func stopAudio(c *exec.Cmd) {
-	if c != nil && c.Process != nil {
-		_ = c.Process.Kill()
+	if c == nil || c.Process == nil {
+		return
+	}
+	_ = c.Process.Kill()
+	if len(c.Args) > 0 && strings.Contains(filepath.Base(c.Args[0]), "termux-media-player") {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		go func() {
+			defer cancel()
+			_ = exec.CommandContext(ctx, "termux-media-player", "stop").Run()
+		}()
 	}
 }
 
-// mediaAudioPath 供 ffprobe/ffmpeg/ffplay 用统一解析后的绝对路径
+// avPath 供 ffmpeg/ffplay 用统一解析后的绝对路径
 func avPath(p string) string {
 	if full, err := sanitizeArtPath(p); err == nil {
 		return full

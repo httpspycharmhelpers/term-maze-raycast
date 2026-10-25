@@ -43,7 +43,6 @@ type Video struct {
 
 var wallImages []WallImage
 var videos []Video
-var nextImageID int
 
 // sanitizeArtPath 校验并返回 ~ 下的完整路径（只允许访问 HOME 目录）
 func sanitizeArtPath(path string) (string, error) {
@@ -543,9 +542,8 @@ func cmdImg(args []string) (string, int) {
 		}
 		im := makeWallImage(lines, x, y)
 		im.Colors = colors
-		nextImageID++
 		wallImages = append(wallImages, im)
-		return fmt.Sprintf("图片 #%d 已贴到墙面 (%d,%d)（%s），尺寸 %dx%d", nextImageID, x, y, note, im.W, im.H), 0
+		return fmt.Sprintf("图片 #%d 已贴到墙面 (%d,%d)（%s），尺寸 %dx%d", len(wallImages), x, y, note, im.W, im.H), 0
 	case "list":
 		var out []string
 		if s := homeMediaList("img"); s != "" {
@@ -562,9 +560,17 @@ func cmdImg(args []string) (string, int) {
 		}
 		return strings.Join(out, "\n"), 0
 	case "remove":
+		if len(args) < 2 {
+			return fmt.Sprintf("用法: img remove <id|all>（当前 %d 张）", len(wallImages)), 1
+		}
+		if args[1] == "all" {
+			n := len(wallImages)
+			wallImages = nil
+			return fmt.Sprintf("已移除全部 %d 张图片", n), 0
+		}
 		id, err := strconv.Atoi(args[1])
 		if err != nil || id < 1 || id > len(wallImages) {
-			return "id 无效", 1
+			return fmt.Sprintf("id 无效（1-%d）", len(wallImages)), 1
 		}
 		wallImages = append(wallImages[:id-1], wallImages[id:]...)
 		return fmt.Sprintf("已移除图片 #%d", id), 0
@@ -597,7 +603,7 @@ func cmdVideo(args []string) (string, int) {
 		case ext == ".mp4":
 			f, f0, hasAudio0, err := mp4ToFrames(avPath(path))
 			if err != nil {
-				return "mp4 失败: " + err.Error(), 1
+				return "mp4 失败: " + err.Error() + "（mp4 需要 ffmpeg；也可用 .gif/.png 或文本帧）", 1
 			}
 			frames = f
 			fps = f0
@@ -609,7 +615,7 @@ func cmdVideo(args []string) (string, int) {
 				if player != "" {
 					src += fmt.Sprintf(" + 音轨(%s播放)", player)
 				} else {
-					src += "，无音频播放器(ffplay/mpv/termux-media-player)"
+					src += "，无音频播放器(termux-media-player/ffplay)"
 				}
 			}
 			if len(frames) >= maxVideoFrames {
@@ -642,23 +648,33 @@ func cmdVideo(args []string) (string, int) {
 			frames = f
 			src = "ASCII 文本帧"
 		}
-		nextImageID++
 		v := Video{X: x, Y: y, Frames: frames, Speed: srate, Playing: true, Start: time.Now(), FPS: fps, Audio: audio}
 		videos = append(videos, v)
-		return fmt.Sprintf("视频 #%d 正在墙面 (%d,%d) 播放（%s，%s，video stop 停止）", nextImageID, x, y, src, srate.Round(time.Millisecond)), 0
+		return fmt.Sprintf("视频 #%d 正在墙面 (%d,%d) 播放（%s，%s，video stop 停止）", len(videos), x, y, src, srate.Round(time.Millisecond)), 0
 	case "stop":
+		if len(args) < 2 {
+			n := 0
+			for i := range videos {
+				if videos[i].Playing || videos[i].Audio != nil {
+					n++
+				}
+				videos[i].Playing = false
+				stopAudio(videos[i].Audio)
+				videos[i].Audio = nil
+			}
+			if n == 0 {
+				return "没有正在播放的视频", 0
+			}
+			return fmt.Sprintf("已停止全部 %d 个视频（含音轨）", n), 0
+		}
 		id, err := strconv.Atoi(args[1])
-		if err != nil || id < 1 {
-			return "id 无效", 1
+		if err != nil || id < 1 || id > len(videos) {
+			return fmt.Sprintf("id 无效（1-%d）", len(videos)), 1
 		}
-		id--
-		if id >= len(videos) {
-			return "没有该视频", 1
-		}
-		videos[id].Playing = false
-		stopAudio(videos[id].Audio)
-		videos[id].Audio = nil
-		return fmt.Sprintf("已停止视频 #%d（含音轨）", id+1), 0
+		videos[id-1].Playing = false
+		stopAudio(videos[id-1].Audio)
+		videos[id-1].Audio = nil
+		return fmt.Sprintf("已停止视频 #%d（含音轨）", id), 0
 	case "list":
 		var out []string
 		if s := homeMediaList("video"); s != "" {
@@ -688,9 +704,20 @@ func cmdVideo(args []string) (string, int) {
 		}
 		return strings.Join(out, "\n"), 0
 	case "remove":
+		if len(args) < 2 {
+			return fmt.Sprintf("用法: video remove <id|all>（当前 %d 个）", len(videos)), 1
+		}
+		if args[1] == "all" {
+			n := len(videos)
+			for i := range videos {
+				stopAudio(videos[i].Audio)
+			}
+			videos = nil
+			return fmt.Sprintf("已移除全部 %d 个视频（含音轨）", n), 0
+		}
 		id, err := strconv.Atoi(args[1])
 		if err != nil || id < 1 || id > len(videos) {
-			return "id 无效", 1
+			return fmt.Sprintf("id 无效（1-%d）", len(videos)), 1
 		}
 		stopAudio(videos[id-1].Audio)
 		videos = append(videos[:id-1], videos[id:]...)

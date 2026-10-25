@@ -223,7 +223,7 @@ func runCmd(args []string, stdin []byte) cmdResult {
 	}
 	name := args[0]
 	if h, ok := builtins[name]; ok {
-		out, code := h(args[1:])
+		out, code := safeBuiltin(name, h, args[1:])
 		return cmdResult{text: out, code: code}
 	}
 	if isUnimplemented(name) {
@@ -236,9 +236,7 @@ func runCmd(args []string, stdin []byte) cmdResult {
 	}
 }
 
-var unimplemented = map[string]bool{
-	"grab": true, "place": true,
-}
+var unimplemented = map[string]bool{}
 
 func isUnimplemented(name string) bool {
 	if unimplemented[name] {
@@ -250,4 +248,15 @@ func isUnimplemented(name string) bool {
 		}
 	}
 	return false
+}
+
+func safeBuiltin(name string, h builtinFunc, args []string) (out string, code int) {
+	code = 1
+	defer func() {
+		if r := recover(); r != nil {
+			out = fmt.Sprintf("%s: 参数错误或内部异常 (%v)，用 help 查看用法", name, r)
+			code = 1
+		}
+	}()
+	return h(args)
 }

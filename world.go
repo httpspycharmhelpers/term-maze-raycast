@@ -440,3 +440,51 @@ func drawEditWindow(w, h int) {
 		}
 	}
 }
+
+func editTarget(args []string) (int, int, bool) {
+	if len(args) >= 2 {
+		x, err1 := strconv.Atoi(args[0])
+		y, err2 := strconv.Atoi(args[1])
+		if err1 != nil || err2 != nil || x < 0 || y < 0 || x >= gameMap.width || y >= gameMap.height {
+			return 0, 0, false
+		}
+		return x, y, true
+	}
+	if len(args) == 1 {
+		return 0, 0, false
+	}
+	if !editMode {
+		setEditMode(true)
+	}
+	return curX, curY, true
+}
+
+func cmdGrab(args []string) (string, int) {
+	x, y, ok := editTarget(args)
+	if !ok {
+		return "用法: grab [x y]（缺省用编辑光标）", 1
+	}
+	grabbedCell = gameMap.grid[y*gameMap.width+x]
+	grabDoorID = doorIdxAt(x, y)
+	grabbedDoor = grabDoorID >= 0
+	return fmt.Sprintf("已抓起 %q (%d,%d) %s", grabbedCell, x, y, map[bool]string{true: "含门", false: "无门"}[grabbedDoor]), 0
+}
+
+func cmdPlace(args []string) (string, int) {
+	x, y, ok := editTarget(args)
+	if !ok {
+		return "用法: place [x y]（缺省用编辑光标）", 1
+	}
+	i := y*gameMap.width + x
+	gameMap.grid[i] = grabbedCell
+	removeDoorAt(x, y)
+	note := ""
+	if grabbedDoor {
+		placeDoor(x, y)
+		if j := doorIdxAt(x, y); j >= 0 && grabDoorID >= 0 && grabDoorID < len(doors) {
+			doors[j].Open = doors[grabDoorID].Open
+		}
+		note = "（含门）"
+	}
+	return fmt.Sprintf("已放置 %q 到 (%d,%d)%s", grabbedCell, x, y, note), 0
+}

@@ -304,6 +304,8 @@ var builtins = map[string]builtinFunc{
 	"goto":      cmdGoto,
 	"elevator":  cmdElevator,
 	"edit":      cmdEdit,
+	"grab":      cmdGrab,
+	"place":     cmdPlace,
 	"img":       cmdImg,
 	"video":     cmdVideo,
 }
@@ -324,13 +326,16 @@ func cmdHelp(_ []string) (string, int) {
   bookmark [名]  标记当前位置    goto [名] 传送书签
   elevator [楼层|home|list]  电梯换层
   edit           进入/退出编辑模式（Q退出）
+  grab [x y]     抓起方块（缺省用编辑光标）
+  place [x y]    放下抓起的方块
   save [名]      存为 ~/ 名.rmap (RAMAP)
   load [名]      载入 ~/ 名.rmap
   file <路径>    识别文件是否为本游戏存档
   img load <文件> [x y] 彩色ASCII(.png/.jpg/.gif)，缺省就近找墙
-  img list|remove <id>   list列出~/图片文件；贴图墙小地图显示I
+  img list | remove <id|all>   列出图片 / 删除贴墙图片
   video play <文件> [x y] mp4转真彩带音轨(需ffmpeg)/gif/图/文本
-  video stop|list|remove <id> 停止含音轨；list列出~/ gif/mp4
+  video stop [id]   停止播放(省略id=全部)
+  video list | remove <id|all>  列出视频 / 删除贴墙视频
   |  管道   && 和   || 或   ; 依次   引号 "  '`, 0
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -67,20 +68,35 @@ func main() {
 		os.Exit(0)
 	}()
 
-	t0 := time.Now()
-	size := 1000
-	if len(os.Args) > 1 {
-		if n, err := strconv.Atoi(os.Args[1]); err == nil && n > 0 {
-			size = n
+	size, saveFile := parseArgs(os.Args[1:])
+	loaded := false
+	status := ""
+	if saveFile != "" {
+		p, err := resolveStartupSavePath(saveFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
+		out, code := loadSaveFromPath(p)
+		if code != 0 {
+			fmt.Fprintln(os.Stderr, out)
+			os.Exit(1)
+		}
+		loaded = true
+		status = out
+	} else {
+		t0 := time.Now()
+		gameMap.regen(size)
+		genMs := time.Since(t0).Milliseconds()
+		status = fmt.Sprintf("迷宫 %dx%d 生成 %dms  按键:2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/-视野 %% 小地图 q退出", gameMap.width, gameMap.height, genMs)
 	}
-	gameMap.regen(size)
-	genMs := time.Since(t0).Milliseconds()
 
 	settings.init()
 	screen.init()
-	player.init(float64(gameMap.startX), float64(gameMap.startY))
-	setStatus(fmt.Sprintf("迷宫 %dx%d 生成 %dms  按键:2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/-视野 %% 小地图 q退出", gameMap.width, gameMap.height, genMs))
+	if !loaded {
+		player.init(float64(gameMap.startX), float64(gameMap.startY))
+	}
+	setStatus(status)
 
 	go player.move()
 
@@ -485,4 +501,29 @@ func drawStatus(w, h int) {
 		r[pos] = c
 		pos++
 	}
+}
+
+func parseArgs(args []string) (size int, saveFile string) {
+	size = 1000
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-s" || a == "--save":
+			if i+1 < len(args) {
+				saveFile = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--save="):
+			saveFile = strings.TrimPrefix(a, "--save=")
+		case strings.HasPrefix(a, "-s="):
+			saveFile = strings.TrimPrefix(a, "-s=")
+		case strings.HasPrefix(a, "-s") && len(a) > 2:
+			saveFile = a[2:]
+		default:
+			if n, err := strconv.Atoi(a); err == nil && n > 0 {
+				size = n
+			}
+		}
+	}
+	return size, saveFile
 }

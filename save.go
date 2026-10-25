@@ -92,6 +92,50 @@ func cmdLoad(args []string) (string, int) {
 	if err != nil {
 		return err.Error(), 1
 	}
+	return loadSaveFromPath(p)
+}
+
+// resolveStartupSavePath 解析 -s/--save 的启动存档路径（支持 ~/ 与省略 .rmap）
+func resolveStartupSavePath(arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return "", fmt.Errorf("-s 需要一个存档路径")
+	}
+	home := os.Getenv("HOME")
+	if strings.HasPrefix(arg, "~/") {
+		arg = filepath.Join(home, arg[2:])
+	}
+	if filepath.IsAbs(arg) {
+		if _, err := os.Stat(arg); err == nil {
+			return arg, nil
+		}
+		if !strings.HasSuffix(arg, ".rmap") {
+			if _, err := os.Stat(arg + ".rmap"); err == nil {
+				return arg + ".rmap", nil
+			}
+		}
+		return "", fmt.Errorf("存档不存在: %s", arg)
+	}
+	cands := []string{arg}
+	if !strings.HasSuffix(arg, ".rmap") {
+		cands = append(cands, arg+".rmap")
+	}
+	if home != "" && !strings.Contains(arg, "/") {
+		cands = append(cands, filepath.Join(home, arg))
+		if !strings.HasSuffix(arg, ".rmap") {
+			cands = append(cands, filepath.Join(home, arg+".rmap"))
+		}
+	}
+	for _, c := range cands {
+		if _, err := os.Stat(c); err == nil {
+			abs, _ := filepath.Abs(c)
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("存档不存在: %s", arg)
+}
+
+func loadSaveFromPath(p string) (string, int) {
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return fmt.Sprintf("无法读取 %s", p), 1
@@ -144,7 +188,7 @@ func cmdLoad(args []string) (string, int) {
 	default:
 		return "存档版本不支持", 1
 	}
-	m.startX, m.startY = 1, 1
+	m.startX, m.startY = int(player.x), int(player.y)
 	gameMap = *m
 	doors = loadedDoors
 	currentFloor = loadedFloor

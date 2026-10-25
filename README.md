@@ -73,8 +73,10 @@ Go 版 raycast 风格 3D 迷宫：融合
 | edit / edit off | 进入/退出编辑模式（Q 退出） |
 | img load <文件> \[x y\] | 贴图片到墙面：`.png/.jpg/.gif` 自动转**彩色** ASCII（真彩背景），其余当文本画；缺省自动找玩家附近的墙放置 |
 | img list / remove <id> | list 同时列出 `~/` 下的图片文件与已贴图 / 卸载贴图 |
-| video play <文件> \[x y\] | 墙面播放：`.mp4` 用 ffmpeg 抽帧转 ASCII 真彩 10fps 且**带音轨**（ffplay/mpv/termux-media-player 任选其一发声）；`.gif` 动图逐帧转 ASCII；静态图片循环；文本格式帧之间用 `---` 行分隔。可同时播放多个视频 |
-| video stop / list / remove <id> | 停止（含音轨）/ 查看 / 卸载视频（list 会列出 `~/` 下的 gif/mp4） |
+| video play <文件> \[x y\] | 墙面播放：`.mp4` 用 ffmpeg 抽帧转 ASCII 真彩 10fps 且**带音轨**（音频优先 termux-media-player，其次 ffplay；只有 ffmpeg 一个必需外部工具）；`.gif`/`.png`/`.jpg` 纯 Go 标准库解码；文本格式帧之间用 `---` 行分隔。可同时播放多个视频 |
+| video stop \[id\] | 停止播放（省略 id 停止全部，含音轨） |
+| video remove <id\|all> / img remove <id\|all> | 删除贴墙视频/图片 |
+| video list | 查看正在播放的视频（同时列出 `~/` 下的 gif/mp4） |
 | save [名] | 存为 `~/名.rmap`（RAMAP，含楼层/玩家/门/地图） |
 | load [名] | 载入 `~/名.rmap` |
 | file <路径> | 识别文件：本游戏存档 / ELF / 未知 |
@@ -90,9 +92,11 @@ Go 版 raycast 风格 3D 迷宫：融合
 pkg install golang
 cd term-maze-raycast
 go build -o term-maze-raycast .
-./term-maze-raycast            # 默认 1000×1000
-./term-maze-raycast 600        # 生成 601×601（自动归一为奇数）
-./term-maze-raycast 2000      # 更大尺寸
+./term-maze-raycast                 # 默认 1000×1000
+./term-maze-raycast 600             # 生成 601×601（自动归一为奇数）
+./term-maze-raycast 2000            # 更大尺寸
+./term-maze-raycast -s world        # 启动即读 ~/world.rmap
+./term-maze-raycast --save=~/a.rmap # 也可用 --save / --save= / -s= / -s路径
 ```
 
 小地图中：四周用 `|` 围边、`#` 墙壁、`P` 玩家、空格空地（显示玩家周围区域，占屏幕左上的 1/4）。
