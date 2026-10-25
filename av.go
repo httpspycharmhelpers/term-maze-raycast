@@ -105,11 +105,21 @@ func mp4ToFrames(path string) (frames []WallImage, fps int, hasAudio bool, err e
 	tmp.Close()
 	defer os.Remove(tmpName)
 
-	cmd := exec.Command(ffmpeg, "-v", "error", "-y", "-i", path, "-an",
+	args := append([]string{"-v", "error", "-y"}, ffmpegHWArgs()...)
+	args = append(args, "-i", path, "-an",
 		"-vf", fmt.Sprintf("fps=%d,scale=%d:%d:flags=bicubic", fps, W, H),
 		"-pix_fmt", "rgb24", "-f", "rawvideo", tmpName)
-	if e := cmd.Run(); e != nil {
-		return nil, 0, false, fmt.Errorf("ffmpeg 抽帧失败: %v", e)
+	if e := exec.Command(ffmpeg, args...).Run(); e != nil {
+		// GPU 硬解不可用时（老显卡/驱动缺失）自动回退到软解
+		if len(ffmpegHWArgs()) > 0 {
+			args = append([]string{"-v", "error", "-y"}, "-i", path, "-an",
+				"-vf", fmt.Sprintf("fps=%d,scale=%d:%d:flags=bicubic", fps, W, H),
+				"-pix_fmt", "rgb24", "-f", "rawvideo", tmpName)
+			e = exec.Command(ffmpeg, args...).Run()
+		}
+		if e != nil {
+			return nil, 0, false, fmt.Errorf("ffmpeg 抽帧失败: %v", e)
+		}
 	}
 
 	raw, err := os.ReadFile(tmpName)
@@ -124,49 +134,47 @@ func mp4ToFrames(path string) (frames []WallImage, fps int, hasAudio bool, err e
 	if n > maxVideoFrames {
 		n = maxVideoFrames
 	}
-	frames = make([]WallImage, 0, n)
-	for f := 0; f < n; f++ {
-		base := f * cell
-		lines := make([]string, 0, H)
-		colors := make([][]uint32, 0, H)
-		for r := 0; r < H; r++ {
-			line := make([]rune, W)
-			colRow := make([]uint32, W)
-			for c := 0; c < W; c++ {
-				i := base + (r*W+c)*3
-				R := raw[i]
-				G := raw[i+1]
-				B := raw[i+2]
-				lum := (299*int(R) + 587*int(G) + 114*int(B)) / 1000
-				idx := lum * (len(videoRamp) - 1) / 255
-				if idx >= len(videoRamp) {
-					idx = len(videoRamp) - 1
+	frames = make([]WallImage, n)
+	parallelFor(n, func(f0, f1 int) {
+		for f := f0; f < f1; f++ {
+			base := f * cell
+			lines := make([]string, 0, H)
+			colors := make([][]uint32, 0, H)
+			for r := 0; r < H; r++ {
+				line := make([]rune, W)
+				colRow := make([]uint32, W)
+				for c := 0; c < W; c++ {
+					i := base + (r*W+c)*3
+					R := raw[i]
+					G := raw[i+1]
+					B := raw[i+2]
+					lum := (299*int(R) + 587*int(G) + 114*int(B)) / 1000
+					idx := lum * (len(videoRamp) - 1) / 255
+					if idx >= len(videoRamp) {
+						idx = len(videoRamp) - 1
+					}
+					line[c] = videoRamp[idx]
+					if R == 0 && G == 0 && B == 0 {
+						// 纯黑保留 0 → 用墙体默认色，少刷一条色码
+						colRow[c] = 0
+					} else {
+						colRow[c] = uint32(R)<<16 | uint32(G)<<8 | uint32(B)
+					}
 				}
-				line[c] = videoRamp[idx]
-				if R == 0 && G == 0 && B == 0 {
-					// 纯黑保留 0 → 用墙体默认色，少刷一条色码
-					colRow[c] = 0
-				} else {
-					colRow[c] = uint32(R)<<16 | uint32(G)<<8 | uint32(B)
-				}
+				lines = append(lines, string(line))
+				colors = append(colors, colRow)
 			}
-			lines = append(lines, string(line))
-			colors = append(colors, colRow)
+			fr := makeWallImage(lines, 0, 0)
+			fr.Colors = colors
+			frames[f] = fr
 		}
-		fr := makeWallImage(lines, 0, 0)
-		fr.Colors = colors
-		frames = append(frames, fr)
-	}
+	})
 	return frames, fps, hasAudio, nil
 }
 
 // startAudio 后台播放音轨；按可用工具依次尝试，返回子进程与所用播放器名
 func startAudio(path string) (*exec.Cmd, string) {
-	players := [][]string{
-		{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-vn"},
-		{"termux-media-player", "play"},
-	}
-	for _, argv := range players {
+	for _, argv := range audioPlayers() {
 		if _, err := exec.LookPath(argv[0]); err != nil {
 			continue
 		}

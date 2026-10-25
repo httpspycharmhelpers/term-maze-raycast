@@ -88,7 +88,7 @@ func main() {
 		t0 := time.Now()
 		gameMap.regen(size)
 		genMs := time.Since(t0).Milliseconds()
-		status = fmt.Sprintf("迷宫 %dx%d 生成 %dms  按键:2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/-视野 %% 小地图 q退出", gameMap.width, gameMap.height, genMs)
+		status = fmt.Sprintf("[%s/%d核] 迷宫 %dx%d 生成 %dms  按键:2前 8后 4/6平移 1/3转向 5/0视高 7/9俯仰 +/-视野 %% 小地图 q退出", platformName(), maxWorkers(), gameMap.width, gameMap.height, genMs)
 	}
 
 	settings.init()

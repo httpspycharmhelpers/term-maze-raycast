@@ -5,7 +5,14 @@ Go 版 raycast 风格 3D 迷宫：融合
 - [raycast-game](https://github.com/httpspycharmhelpers/raycast-game) — 画面与操作：墙壁 / 天花板 / 地板 / 俯仰 / 视高 / 视野的 DDA 光线投射渲染，按键布局完全一致
 - [term-maze-3d](https://github.com/Yadav106/termi-maze-3d) — 迷宫玩法：随机迷宫、自由探索
 
-面向 Linux 终端的 Go 实现，零第三方图像库，仅依赖 `eiannone/keyboard`（按键）与 `x/sys/unix`（终端尺寸）。
+Go 实现，零第三方图像库，仅依赖 `eiannone/keyboard`（按键）与 `x/sys/unix`（终端尺寸）。同一份源码提供**两套构建**：
+
+| 构建 | 目标 | 音频 | 画面节拍 | 生成并行 | 视频解码 |
+| --- | --- | --- | --- | --- | --- |
+| 默认（Linux） | 桌面 Linux | 优先 `ffplay` | 60fps | 最多 16 核 | ffmpeg，优先 `-hwaccel auto` 显卡硬解 |
+| `-tags termux` | Termux（Android） | 优先 `termux-media-player` | 40fps | 最多 4 核 | ffmpeg 软解 |
+
+两者都只要求 `ffmpeg`（仅 mp4 需要），图片/GIF 用 Go 标准库。
 
 ## 画面
 
@@ -23,8 +30,9 @@ Go 版 raycast 风格 3D 迷宫：融合
 
 - 生成提速：一次开传奇数格棋盘空间，命中率恒定，大尺寸迷宫数百毫秒内完成
 - 渲染提速：列缓冲 / 行缓冲 / 帧缓冲跨帧复用，零每帧分配；光线给 512 步上限防长走廊卡顿
-- 帧率：输入以 ~60Hz 节拍更新（手感不变），画面**增量重绘**、上限约 40fps —— 只在内容变化时才向终端发送该行，画面静止时一字节都不写，终端不再被每秒数百 KB 整屏刷新淹没，画面稳且顺（状态行只保留开机按键提示与「小地图开/关」「视野」等瞬时信息，不显示 FPS/坐标）
-- 关于“硬件加速”：终端游戏由终端自身（GPU 加速的文本渲染）绘制画面，游戏只需喂字节流，因此保持纯软件实现，不引入 GL/窗口库
+- 生成提速：彩蛋墙改为 1024 张图案池（图案由种子派生、随种子可重现），1501² 大图不再为每格存一张 8×8 图案，生成内存从约 25MB 降到不足 1MB；600² 以上按核数并行挖通道，小图自动串行
+- 帧率：Linux 版 60fps、Termux 版 40fps；画面**增量重绘**，只在内容变化时才发送该行，画面静止时一字节都不写（状态行只保留开机按键提示与「小地图开/关」「视野」等瞬时信息，不显示 FPS/坐标）
+- 硬件利用：画面由终端自身（GPU 加速的文本渲染）绘制，游戏只喂字节流；Linux 版额外让 ffmpeg 用 `-hwaccel auto` 走显卡解码视频，失败自动回退软解
 - 画面稳定：终端尺寸每 100ms 采样一次并保持稳定，弹出软键盘/瞬时抖动不会导致画面来回跳动；尺寸真正变化时清屏一次，不乱码
 - 按键：`1` 右转、`3` 左转
 - 移动/转向即时响应：每按一次键立刻走一步（按住可连续移动），松开后做 250ms 的平滑滑动衔接，不依赖终端按键自动重复，Linux 桌面终端上也顺滑
@@ -87,17 +95,23 @@ Go 版 raycast 风格 3D 迷宫：融合
 
 ## 构建运行
 
+依赖：Go 1.22+；`ffmpeg` 仅 mp4 贴图/视频需要。Linux 用 `apt install golang ffmpeg`（Fedora `dnf`、Arch `pacman`），Termux 用 `pkg install golang ffmpeg`。
+
 ```bash
-# Linux（Debian/Ubuntu；Fedora 用 dnf，Arch 用 pacman）
-sudo apt install golang
-# Termux（Android）用：pkg install golang
 cd term-maze-raycast
-go build -o term-maze-raycast .
-./term-maze-raycast                 # 默认 1000×1000
-./term-maze-raycast 600             # 生成 601×601（自动归一为奇数）
-./term-maze-raycast 2000            # 更大尺寸
-./term-maze-raycast -s world        # 启动即读 ~/world.rmap
-./term-maze-raycast --save=~/a.rmap # 也可用 --save / --save= / -s= / -s路径
+
+# Linux 版（产物命名：平台-名称-版本）
+GOOS=linux CGO_ENABLED=0 go build -o linux-$(go env GOARCH)-term-maze-raycast-1.0.0 .
+
+# Termux 版（Android/arm64；在 Termux 里可省略 GOOS/GOARCH）
+GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -tags termux -o termux-arm64-term-maze-raycast-1.0.0 .
+
+BIN=./linux-amd64-term-maze-raycast-1.0.0   # Termux 版换成 termux-arm64-...
+$BIN                  # 默认 1000×1000
+$BIN 600              # 生成 601×601（自动归一为奇数）
+$BIN 2000             # 更大尺寸
+$BIN -s world         # 启动即读 ~/world.rmap
+$BIN --save=~/a.rmap  # 也可用 --save / --save= / -s= / -s路径
 ```
 
 小地图中：四周用 `|` 围边、`#` 墙壁、`P` 玩家、空格空地（显示玩家周围区域，占屏幕左上的 1/4）。
